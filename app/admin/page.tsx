@@ -1,15 +1,13 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
-import { supabase, Submission, isSupabaseConfigured } from "../lib/supabase";
+import { useEffect, useMemo, useState, useRef } from "react";
+import Link from "next/link";
+import { supabase, Submission, isSupabaseConfigured, AdminSubmission, AdminNote } from "../lib/supabase";
 import { 
   Inbox, 
   Filter, 
   Flame, 
   Zap, 
-  Brain, 
-  Cpu, 
-  LineChart, 
   Search, 
   Calendar, 
   Clock, 
@@ -22,37 +20,88 @@ import {
   ArrowUpDown, 
   CheckCircle2, 
   Sparkles,
-  Database
+  Database,
+  HeartPulse,
+  ChevronDown,
+  X,
+  User,
+  Users,
+  Check,
+  Send,
+  Trash2,
+  Tag,
+  ChevronRight,
+  UserPlus,
+  ArrowLeft,
+  ArrowRight
 } from "lucide-react";
 import { motion, AnimatePresence } from "framer-motion";
+import { mockSubmissions } from "../data/mockSubmissions";
+import { sections, questions, Question } from "../data/questions";
 
-const FREQUENCY_SCORES: Record<string, number> = {
-  "Multiple times daily": 5,
-  "Daily": 4,
-  "Weekly": 3,
-  "Monthly": 2,
-  "Occasionally": 1
-};
+const AVAILABLE_TAGS = ["AI", "Automation", "Dashboard", "Process Issue", "Compliance", "Needs Discussion"];
+const AVAILABLE_OWNERS = ["Unassigned", "AI Solutions Team", "Automation Team", "Analytics Support", "IT Operations", "Business Systems"];
 
 export default function AdminPage() {
-  const [submissions, setSubmissions] = useState<Submission[]>([]);
+  const [submissions, setSubmissions] = useState<AdminSubmission[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [isRefreshing, setIsRefreshing] = useState(false);
+  const [errorMessage, setErrorMessage] = useState("");
 
   // Search & Filter States
   const [searchQuery, setSearchQuery] = useState("");
-  const [department, setDepartment] = useState("All");
-  const [supportType, setSupportType] = useState("All");
-  const [sortBy, setSortBy] = useState<"newest" | "oldest" | "frequency">("newest");
+  const [selectedDept, setSelectedDept] = useState("All");
+  const [selectedStatus, setSelectedStatus] = useState("All");
+  const [selectedSupport, setSelectedSupport] = useState("All");
+  const [selectedFrequency, setSelectedFrequency] = useState("All");
+  const [selectedDateRange, setSelectedDateRange] = useState("All");
+
+  // Mobile filters toggle
+  const [showMobileFilters, setShowMobileFilters] = useState(false);
+
+  // Sorting
+  const [sortField, setSortField] = useState<string>("created_at");
+  const [sortDirection, setSortDirection] = useState<"asc" | "desc">("desc");
+
+  // Pagination
+  const [currentPage, setCurrentPage] = useState(1);
+  const itemsPerPage = 10;
+
+  // Toast Notification State
+  const [toast, setToast] = useState<{ message: string; type: "success" | "error" } | null>(null);
+
+  // Detail Drawer state
+  const [selectedSubmission, setSelectedSubmission] = useState<AdminSubmission | null>(null);
 
   // Safe checks for Supabase configuration
   const isConfigured = typeof isSupabaseConfigured !== "undefined" ? isSupabaseConfigured : true;
 
+  const showToast = (message: string, type: "success" | "error") => {
+    setToast({ message, type });
+  };
+
+  // Auto-dismiss toast
+  useEffect(() => {
+    if (toast) {
+      const timer = setTimeout(() => setToast(null), 4000);
+      return () => clearTimeout(timer);
+    }
+  }, [toast]);
+
+  // Reset pagination on filter or search updates
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [searchQuery, selectedDept, selectedStatus, selectedSupport, selectedFrequency, selectedDateRange]);
+
   async function loadSubmissions() {
     setIsLoading(true);
+    setErrorMessage("");
+    
     if (!isConfigured || !supabase) {
-      console.error("Supabase not configured");
+      console.log("Supabase not configured, using mock submissions.");
+      setSubmissions(mockSubmissions);
       setIsLoading(false);
+      setIsRefreshing(false);
       return;
     }
 
@@ -63,12 +112,15 @@ export default function AdminPage() {
         .order("created_at", { ascending: false });
 
       if (error) {
-        console.error(error);
+        console.error("DB Query error:", error);
+        setErrorMessage("Error loading from Supabase. Falling back to local data.");
+        setSubmissions(mockSubmissions);
       } else {
-        setSubmissions(data || []);
+        setSubmissions((data as AdminSubmission[]) || []);
       }
     } catch (err) {
       console.error("Error loading submissions:", err);
+      setSubmissions(mockSubmissions);
     } finally {
       setIsLoading(false);
       setIsRefreshing(false);
@@ -84,147 +136,259 @@ export default function AdminPage() {
     loadSubmissions();
   };
 
-  // Helper to map frequency to sorting score
-  const getFrequencyScore = (freq?: string) => {
-    if (!freq) return 0;
-    return FREQUENCY_SCORES[freq] || 0;
+  // State updates helper: writes back to Supabase and updates local state with rollback on failure
+  const updateSubmissionField = async (
+    id: string | number, 
+    field: keyof Submission, 
+    value: any
+  ) => {
+    // Capture previous state in case we need to roll back
+    let previousSubmissions: AdminSubmission[] = [];
+    setSubmissions((prev) => {
+      previousSubmissions = prev;
+      return prev.map((sub) => (String(sub.id) === String(id) ? { ...sub, [field]: value } : sub));
+    });
+
+    let previousSelected: AdminSubmission | null = null;
+    setSelectedSubmission((prev) => {
+      if (prev && String(prev.id) === String(id)) {
+        previousSelected = prev;
+        return { ...prev, [field]: value };
+      }
+      return prev;
+    });
+
+    if (!isConfigured || !supabase) {
+      // Local Mode
+      showToast(field === "status" ? "Status updated successfully" : "Field updated successfully", "success");
+      return;
+    }
+
+    try {
+      // Safe casting of ID targeting bigint database IDs
+      const eqId = typeof id === "number" ? id : (isNaN(Number(id)) ? id : Number(id));
+      const { error } = await supabase
+        .from("submissions")
+        .update({ [field]: value })
+        .eq("id", eqId);
+
+      if (error) {
+        console.error("Error updating submission field:", error);
+        // Rollback state
+        if (previousSubmissions.length > 0) setSubmissions(previousSubmissions);
+        if (previousSelected) setSelectedSubmission(previousSelected);
+        showToast("Unable to save changes. Please try again.", "error");
+      } else {
+        showToast(field === "status" ? "Status updated successfully" : "Field updated successfully", "success");
+      }
+    } catch (e) {
+      console.error("Exception updating field:", e);
+      // Rollback state
+      if (previousSubmissions.length > 0) setSubmissions(previousSubmissions);
+      if (previousSelected) setSelectedSubmission(previousSelected);
+      showToast("Unable to save changes. Please try again.", "error");
+    }
   };
 
-  // 1. Dynamic smart badges logic derived client-side
-  const getSmartBadges = (submission: Submission) => {
-    const badges = [];
-    const freq = submission.frequency || "";
-    const support = submission.expected_support || "";
-    const work = submission.work_type || "";
-    const area = submission.affected_area || "";
-
-    if (freq === "Multiple times daily" || freq === "Daily") {
-      badges.push({
-        id: "high-frequency",
-        label: "High Frequency",
-        bg: "bg-amber-500/10 border-amber-500/20 text-amber-400",
-        icon: Zap
-      });
-    }
-
-    if (
-      support === "AI assistant" || 
-      support === "Smart search" ||
-      work.includes("Searching through files/data") ||
-      work.includes("Decision-making based on data") ||
-      work.includes("Reviewing documents manually")
-    ) {
-      badges.push({
-        id: "ai-potential",
-        label: "AI Potential",
-        bg: "bg-purple-500/10 border-purple-500/20 text-purple-400",
-        icon: Brain
-      });
-    }
-
-    if (
-      support === "Automation" || 
-      support === "Workflow system" ||
-      work.includes("Manual repetitive work") ||
-      work.includes("Copy-pasting between systems") ||
-      work.includes("Tracking approvals/follow-ups")
-    ) {
-      badges.push({
-        id: "automation",
-        label: "Automation Opportunity",
-        bg: "bg-emerald-500/10 border-emerald-500/20 text-emerald-400",
-        icon: Cpu
-      });
-    }
-
-    if (
-      support === "Dashboard/reporting" ||
-      area === "Reporting" ||
-      area === "Data Analysis" ||
-      work.includes("Preparing recurring reports")
-    ) {
-      badges.push({
-        id: "dashboard",
-        label: "Dashboard Opportunity",
-        bg: "bg-blue-500/10 border-blue-500/20 text-blue-400",
-        icon: LineChart
-      });
-    }
-
-    return badges;
+  // Safe employee name retriever
+  const getEmployeeName = (submission: AdminSubmission) => {
+    if (submission.employee_name) return submission.employee_name;
+    if ((submission as any).name) return (submission as any).name;
+    try {
+      const parsed = JSON.parse(submission.desired_outcome || "");
+      if (parsed.employee_name) return parsed.employee_name;
+      if (parsed.name) return parsed.name;
+    } catch (e) {}
+    return "Not Provided";
   };
+
+  // Urgency prioritization scoring helper
+  const getUrgencyScore = (urgency?: string) => {
+    switch (urgency?.toLowerCase()) {
+      case "critical": return 4;
+      case "high": return 3;
+      case "medium": return 2;
+      case "low": return 1;
+      default: return 0;
+    }
+  };
+
+  // Derived KPIs
+  const totalRequests = submissions.length;
+  const newRequests = submissions.filter((s) => s.status === "New" || !s.status).length;
+  const underReviewRequests = submissions.filter((s) => s.status === "Under Review").length;
+  const completedRequests = submissions.filter((s) => s.status === "Completed" || s.status === "Implemented").length;
+  const rejectedRequests = submissions.filter((s) => s.status === "Rejected").length;
 
   // Filter Submissions
   const filteredSubmissions = useMemo(() => {
     return submissions.filter((submission) => {
-      const matchesDepartment =
-        department === "All" ||
-        submission.department?.trim().toLowerCase() ===
-          department.trim().toLowerCase();
-
-      const matchesSupport =
-        supportType === "All" ||
-        submission.expected_support?.trim().toLowerCase() ===
-          supportType.trim().toLowerCase();
-
+      // 1. Case-insensitive, partial-match search using includes()
       const searchLower = searchQuery.toLowerCase().trim();
-      const matchesSearch =
-        searchLower === "" ||
-        submission.department?.toLowerCase().includes(searchLower) ||
-        submission.affected_area?.toLowerCase().includes(searchLower) ||
-        submission.work_type?.toLowerCase().includes(searchLower) ||
-        submission.friction?.toLowerCase().includes(searchLower) ||
-        submission.desired_outcome?.toLowerCase().includes(searchLower) ||
-        submission.expected_support?.toLowerCase().includes(searchLower) ||
-        submission.systems_involved?.some(sys => sys.toLowerCase().includes(searchLower));
+      let matchesSearch = true;
+      
+      if (searchLower !== "") {
+        const employeeName = getEmployeeName(submission).toLowerCase();
+        const department = (submission.department || "").toLowerCase();
+        
+        // Affected Area
+        let affectedArea = "";
+        if (Array.isArray(submission.affected_area)) {
+          affectedArea = submission.affected_area.join(", ").toLowerCase();
+        } else {
+          affectedArea = (submission.affected_area || "").toLowerCase();
+        }
 
-      return matchesDepartment && matchesSupport && matchesSearch;
+        // Work Type
+        const workType = (submission.work_type || "").toLowerCase();
+
+        // Friction
+        let friction = "";
+        if (Array.isArray(submission.friction)) {
+          friction = submission.friction.join(", ").toLowerCase();
+        } else {
+          friction = (submission.friction || "").toLowerCase();
+        }
+
+        // Desired Outcome
+        let desiredOutcome = (submission.desired_outcome || "").toLowerCase();
+        try {
+          const parsed = JSON.parse(submission.desired_outcome || "");
+          desiredOutcome = (
+            (parsed.pain_point_desc || "") + " " + 
+            (parsed.desired_outcome_short || "") + " " + 
+            (parsed.expected_support || "")
+          ).toLowerCase();
+        } catch (e) {}
+
+        // Systems Involved
+        let systemsInvolved = "";
+        if (submission.systems_involved) {
+          systemsInvolved = submission.systems_involved.join(", ").toLowerCase();
+        }
+
+        matchesSearch = 
+          employeeName.includes(searchLower) ||
+          department.includes(searchLower) ||
+          affectedArea.includes(searchLower) ||
+          workType.includes(searchLower) ||
+          friction.includes(searchLower) ||
+          desiredOutcome.includes(searchLower) ||
+          systemsInvolved.includes(searchLower);
+      }
+
+      // 2. Department Filter
+      const matchesDept = 
+        selectedDept === "All" || 
+        submission.department?.toLowerCase() === selectedDept.toLowerCase();
+
+      // 3. Status Filter
+      const activeStatus = submission.status || "New";
+      const matchesStatus = 
+        selectedStatus === "All" || 
+        activeStatus.toLowerCase() === selectedStatus.toLowerCase();
+
+      // 4. Support Type Filter
+      let recordSupport = submission.expected_support || "Not Specified";
+      try {
+        const parsed = JSON.parse(submission.desired_outcome || "");
+        recordSupport = parsed.expected_support || recordSupport;
+      } catch (e) {}
+      const matchesSupport = 
+        selectedSupport === "All" || 
+        recordSupport.toLowerCase() === selectedSupport.toLowerCase();
+
+      // 5. Frequency Filter
+      const matchesFrequency = 
+        selectedFrequency === "All" || 
+        submission.frequency?.toLowerCase() === selectedFrequency.toLowerCase();
+
+      // 6. Date Range Filter
+      let matchesDate = true;
+      if (selectedDateRange !== "All" && submission.created_at) {
+        const createdDate = new Date(submission.created_at);
+        const today = new Date();
+        const diffTime = Math.abs(today.getTime() - createdDate.getTime());
+        const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
+        
+        if (selectedDateRange === "7days") matchesDate = diffDays <= 7;
+        else if (selectedDateRange === "30days") matchesDate = diffDays <= 30;
+      }
+
+      return matchesSearch && matchesDept && matchesStatus && matchesSupport && matchesFrequency && matchesDate;
     });
-  }, [submissions, department, supportType, searchQuery]);
+  }, [submissions, searchQuery, selectedDept, selectedStatus, selectedSupport, selectedFrequency, selectedDateRange]);
 
   // Sort Submissions
   const sortedSubmissions = useMemo(() => {
     return [...filteredSubmissions].sort((a, b) => {
-      if (sortBy === "newest") {
-        const timeA = a.created_at ? new Date(a.created_at).getTime() : 0;
-        const timeB = b.created_at ? new Date(b.created_at).getTime() : 0;
-        return timeB - timeA;
+      let valA: any = "";
+      let valB: any = "";
+
+      if (sortField === "created_at") {
+        valA = a.created_at ? new Date(a.created_at).getTime() : 0;
+        valB = b.created_at ? new Date(b.created_at).getTime() : 0;
+      } else if (sortField === "urgency") {
+        let urgA = "Medium";
+        let urgB = "Medium";
+        try { urgA = JSON.parse(a.desired_outcome || "").urgency || "Medium"; } catch(e){}
+        try { urgB = JSON.parse(b.desired_outcome || "").urgency || "Medium"; } catch(e){}
+        valA = getUrgencyScore(urgA);
+        valB = getUrgencyScore(urgB);
+      } else if (sortField === "department") {
+        valA = a.department || "";
+        valB = b.department || "";
+      } else if (sortField === "employee_name") {
+        valA = getEmployeeName(a);
+        valB = getEmployeeName(b);
+      } else if (sortField === "frequency") {
+        valA = a.frequency || "";
+        valB = b.frequency || "";
+      } else if (sortField === "status") {
+        valA = a.status || "New";
+        valB = b.status || "New";
+      } else if (sortField === "support_type") {
+        let supA = a.expected_support || "Not Specified";
+        let supB = b.expected_support || "Not Specified";
+        try { supA = JSON.parse(a.desired_outcome || "").expected_support || supA; } catch(e){}
+        try { supB = JSON.parse(b.desired_outcome || "").expected_support || supB; } catch(e){}
+        valA = supA;
+        valB = supB;
+      } else if (sortField === "affected_area") {
+        valA = Array.isArray(a.affected_area) ? a.affected_area.join(", ") : (a.affected_area || "");
+        valB = Array.isArray(b.affected_area) ? b.affected_area.join(", ") : (b.affected_area || "");
       }
-      if (sortBy === "oldest") {
-        const timeA = a.created_at ? new Date(a.created_at).getTime() : 0;
-        const timeB = b.created_at ? new Date(b.created_at).getTime() : 0;
-        return timeA - timeB;
+
+      if (typeof valA === "string") {
+        return sortDirection === "asc" 
+          ? valA.localeCompare(valB) 
+          : valB.localeCompare(valA);
       }
-      if (sortBy === "frequency") {
-        const scoreA = getFrequencyScore(a.frequency);
-        const scoreB = getFrequencyScore(b.frequency);
-        if (scoreA !== scoreB) {
-          return scoreB - scoreA;
-        }
-        // Fallback to newest
-        const timeA = a.created_at ? new Date(a.created_at).getTime() : 0;
-        const timeB = b.created_at ? new Date(b.created_at).getTime() : 0;
-        return timeB - timeA;
-      }
+
+      if (valA < valB) return sortDirection === "asc" ? -1 : 1;
+      if (valA > valB) return sortDirection === "asc" ? 1 : -1;
       return 0;
     });
-  }, [filteredSubmissions, sortBy]);
+  }, [filteredSubmissions, sortField, sortDirection]);
 
-  // Derived Stats
-  const totalSubmissions = submissions.length;
-  const visibleSubmissions = filteredSubmissions.length;
-  
-  const highFrequencySubmissions = useMemo(() => {
-    return submissions.filter(
-      (s) => s.frequency === "Multiple times daily" || s.frequency === "Daily"
-    ).length;
-  }, [submissions]);
+  // Paginated Submissions
+  const paginatedSubmissions = useMemo(() => {
+    const startIndex = (currentPage - 1) * itemsPerPage;
+    return sortedSubmissions.slice(startIndex, startIndex + itemsPerPage);
+  }, [sortedSubmissions, currentPage, itemsPerPage]);
 
-  // Unique departments for filter list (derived from data dynamically or hardcoded)
-  const availableDepartments = ["All", "Sales", "HR", "Finance", "Supply Chain", "Manufacturing", "IT", "Medical", "R&D", "Other"];
-  const availableSupportTypes = ["All", "Automation", "AI assistant", "Dashboard/reporting", "Smart search", "Alerts/reminders", "Workflow system", "Unsure"];
+  const totalPages = Math.ceil(sortedSubmissions.length / itemsPerPage);
 
-  // Date Formatter helpers
+  const handleSort = (field: string) => {
+    if (sortField === field) {
+      setSortDirection((prev) => (prev === "asc" ? "desc" : "asc"));
+    } else {
+      setSortField(field);
+      setSortDirection("desc");
+    }
+  };
+
+  // Human dates helper
   const formatDate = (dateStr?: string) => {
     if (!dateStr) return "N/A";
     const date = new Date(dateStr);
@@ -235,376 +399,943 @@ export default function AdminPage() {
     });
   };
 
-  const getRelativeTime = (dateStr?: string) => {
-    if (!dateStr) return "";
-    const date = new Date(dateStr);
-    const now = new Date();
-    const diffMs = now.getTime() - date.getTime();
-    const diffMins = Math.floor(diffMs / 60000);
-    const diffHours = Math.floor(diffMins / 60);
-    const diffDays = Math.floor(diffHours / 24);
-
-    if (diffMins < 1) return "Just now";
-    if (diffMins < 60) return `${diffMins}m ago`;
-    if (diffHours < 24) return `${diffHours}h ago`;
-    return `${diffDays}d ago`;
+  // Workflow Status Badge colors
+  const statusColors: Record<string, string> = {
+    "New": "bg-slate-100 text-slate-800 border-slate-200",
+    "Under Review": "bg-amber-50 text-amber-800 border-amber-200",
+    "Approved": "bg-emerald-50 text-emerald-800 border-emerald-200",
+    "Completed": "bg-blue-50 text-blue-800 border-blue-200",
+    "Implemented": "bg-blue-50 text-blue-800 border-blue-200",
+    "Rejected": "bg-rose-50 text-rose-800 border-rose-200"
   };
 
+  const FilterFormControls = () => (
+    <div className="space-y-4">
+      {/* Department Filter */}
+      <div>
+        <label className="text-[10px] uppercase font-bold text-slate-400 block mb-1.5">
+          Department
+        </label>
+        <select
+          value={selectedDept}
+          onChange={(e) => setSelectedDept(e.target.value)}
+          className="w-full bg-white border border-slate-200 hover:border-slate-300 focus:border-blue-500 rounded-lg px-3 py-2 text-xs text-slate-800 outline-none cursor-pointer transition shadow-sm"
+        >
+          <option value="All">All Departments</option>
+          {AVAILABLE_OWNERS.slice(1).map(dept => (
+            <option key={dept} value={dept}>{dept}</option>
+          ))}
+          {["Sales", "Marketing", "HR", "Finance", "Procurement", "Supply Chain", "Manufacturing", "Quality", "Regulatory Affairs", "Medical Affairs", "Pharmacovigilance", "R&D", "IT", "Legal / Compliance", "Other"].map(dept => (
+            <option key={dept} value={dept}>{dept}</option>
+          ))}
+        </select>
+      </div>
+
+      {/* Status Filter */}
+      <div>
+        <label className="text-[10px] uppercase font-bold text-slate-400 block mb-1.5">
+          Workflow Status
+        </label>
+        <select
+          value={selectedStatus}
+          onChange={(e) => setSelectedStatus(e.target.value)}
+          className="w-full bg-white border border-slate-200 hover:border-slate-300 focus:border-blue-500 rounded-lg px-3 py-2 text-xs text-slate-800 outline-none cursor-pointer transition shadow-sm"
+        >
+          <option value="All">All Statuses</option>
+          {["New", "Under Review", "Approved", "Completed", "Rejected"].map(status => (
+            <option key={status} value={status}>{status}</option>
+          ))}
+        </select>
+      </div>
+
+      {/* Support Type Filter */}
+      <div>
+        <label className="text-[10px] uppercase font-bold text-slate-400 block mb-1.5">
+          Support Type
+        </label>
+        <select
+          value={selectedSupport}
+          onChange={(e) => setSelectedSupport(e.target.value)}
+          className="w-full bg-white border border-slate-200 hover:border-slate-300 focus:border-blue-500 rounded-lg px-3 py-2 text-xs text-slate-800 outline-none cursor-pointer transition shadow-sm"
+        >
+          <option value="All">All Support Types</option>
+          {["Automation", "AI Assistant / Chatbot", "Dashboard or Reporting", "Smart Search", "Alerts or Reminders", "Workflow or Approval System", "Document Summarization", "Data Extraction", "Data Analysis", "Not Sure"].map(sup => (
+            <option key={sup} value={sup}>{sup}</option>
+          ))}
+        </select>
+      </div>
+
+      {/* Frequency Filter */}
+      <div>
+        <label className="text-[10px] uppercase font-bold text-slate-400 block mb-1.5">
+          Frequency
+        </label>
+        <select
+          value={selectedFrequency}
+          onChange={(e) => setSelectedFrequency(e.target.value)}
+          className="w-full bg-white border border-slate-200 hover:border-slate-300 focus:border-blue-500 rounded-lg px-3 py-2 text-xs text-slate-800 outline-none cursor-pointer transition shadow-sm"
+        >
+          <option value="All">All Frequencies</option>
+          {["Multiple times daily", "Daily", "Weekly", "Monthly", "Quarterly", "Occasionally"].map(freq => (
+            <option key={freq} value={freq}>{freq}</option>
+          ))}
+        </select>
+      </div>
+
+      {/* Date Range Filter */}
+      <div>
+        <label className="text-[10px] uppercase font-bold text-slate-400 block mb-1.5">
+          Date Range
+        </label>
+        <select
+          value={selectedDateRange}
+          onChange={(e) => setSelectedDateRange(e.target.value)}
+          className="w-full bg-white border border-slate-200 hover:border-slate-300 focus:border-blue-500 rounded-lg px-3 py-2 text-xs text-slate-800 outline-none cursor-pointer transition shadow-sm"
+        >
+          <option value="All">All Time</option>
+          <option value="7days">Last 7 Days</option>
+          <option value="30days">Last 30 Days</option>
+        </select>
+      </div>
+    </div>
+  );
+
   return (
-    <main className="min-h-screen bg-black text-zinc-100 p-4 sm:p-6 lg:p-8 relative overflow-hidden font-sans">
-      {/* Premium background effects */}
-      <div className="pointer-events-none fixed inset-0 bg-[radial-gradient(circle_at_50%_0%,rgba(99,102,241,0.08),transparent_50%)]" />
-      <div className="pointer-events-none fixed inset-0 bg-[linear-gradient(to_right,rgba(255,255,255,0.01)_1px,transparent_1px),linear-gradient(to_bottom,rgba(255,255,255,0.01)_1px,transparent_1px)] bg-[size:4rem_4rem] [mask-image:radial-gradient(ellipse_60%_50%_at_50%_0%,#000_70%,transparent_100%)] opacity-[0.4]" />
+    <main className="min-h-screen bg-slate-50 text-slate-800 p-4 sm:p-6 lg:p-8 font-sans relative overflow-x-hidden">
+      {/* Background Soft Accents */}
+      <div className="pointer-events-none fixed inset-0 bg-[radial-gradient(circle_at_50%_0%,#EAF3FF_0%,transparent_50%)] opacity-70" />
 
       <div className="max-w-7xl mx-auto relative z-10">
         
         {/* HEADER SECTION */}
-        <header className="flex flex-col md:flex-row md:items-center md:justify-between gap-6 mb-10 pb-6 border-b border-zinc-900">
+        <header className="flex flex-col md:flex-row md:items-center md:justify-between gap-5 mb-8 pb-5 border-b border-slate-200">
           <div>
             <div className="flex items-center gap-2">
-              <span className="h-2 w-2 rounded-full bg-emerald-500 animate-pulse" />
-              <p className="text-zinc-500 uppercase tracking-[0.2em] text-xs font-semibold">
-                Enterprise AI Command Center
+              <span className="h-2 w-2 rounded-full bg-blue-600 animate-pulse" />
+              <p className="text-slate-400 uppercase tracking-widest text-[9px] font-extrabold">
+                Glenmark Pharmaceuticals Opportunity Command Center
               </p>
             </div>
-            <h1 className="text-4xl sm:text-5xl font-bold mt-2 tracking-tight text-transparent bg-clip-text bg-gradient-to-r from-white via-zinc-200 to-zinc-400">
-              AI Opportunity Queue
+            <h1 className="text-2xl font-extrabold mt-1 tracking-tight text-slate-900 flex items-center gap-3">
+              FormAI Opportunities Queue
+              <span className="rounded-full bg-blue-100/70 border border-blue-200 px-2.5 py-0.5 text-xs font-bold text-blue-700">
+                Admin Console
+              </span>
             </h1>
-            <p className="text-zinc-400 text-sm sm:text-base mt-2 max-w-xl">
-              Evaluate, prioritize, and catalog incoming team bottleneck submissions for smart interventions.
+            <p className="text-slate-500 text-xs mt-1.5 font-medium max-w-xl">
+              Evaluate, filter, prioritize, and collaborate on automation and AI use cases submitted by Glenmark employees.
             </p>
           </div>
 
-          <div className="flex items-center gap-3 self-start md:self-center">
+          <div className="flex flex-wrap items-center gap-3 self-start md:self-center">
             {isConfigured ? (
-              <span className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-medium bg-emerald-500/10 text-emerald-400 border border-emerald-500/15">
-                <CheckCircle2 className="h-3 w-3" /> Live Supabase
+              <span className="inline-flex items-center gap-1 px-3 py-1.5 rounded-xl text-[10px] font-bold bg-emerald-50 text-emerald-700 border border-emerald-200 shadow-sm">
+                <CheckCircle2 className="h-3 w-3 stroke-[2.5]" /> Live Supabase Connected
               </span>
             ) : (
-              <span className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-medium bg-amber-500/10 text-amber-400 border border-amber-500/15">
-                <AlertTriangle className="h-3 w-3" /> Local Mode
+              <span className="inline-flex items-center gap-1 px-3 py-1.5 rounded-xl text-[10px] font-bold bg-amber-50 text-amber-700 border border-amber-200 shadow-sm">
+                <AlertTriangle className="h-3 w-3" /> Local Mode / Demo Data
               </span>
             )}
             
             <button
               onClick={handleRefresh}
               disabled={isLoading || isRefreshing}
-              className="flex items-center gap-2 rounded-xl bg-zinc-900 hover:bg-zinc-800 border border-zinc-800 text-zinc-300 hover:text-white px-4 py-2 text-sm transition-all duration-200 cursor-pointer disabled:opacity-50"
+              className="flex items-center gap-2 rounded-xl bg-white border border-slate-200 hover:bg-slate-50 text-slate-700 px-4 py-2.5 text-xs font-bold shadow-sm transition duration-150 cursor-pointer disabled:opacity-50"
             >
-              <RefreshCw className={`h-4 w-4 ${isRefreshing ? "animate-spin" : ""}`} />
+              <RefreshCw className={`h-3.5 w-3.5 ${isRefreshing ? "animate-spin" : ""}`} />
               Refresh
             </button>
+            <Link
+              href="/"
+              className="rounded-xl bg-blue-600 hover:bg-blue-700 text-white px-4 py-2.5 text-xs font-bold shadow-md shadow-blue-500/10 transition duration-150"
+            >
+              Intake Form
+            </Link>
           </div>
         </header>
 
-        {/* METRICS / TOP STATS CARDS */}
-        <section className="grid grid-cols-1 md:grid-cols-3 gap-5 mb-8">
-          
-          {/* Card 1: Total submissions */}
-          <div className="group relative bg-zinc-950/40 border border-zinc-900 rounded-2xl p-6 hover:border-zinc-800 transition-all duration-300 backdrop-blur-md">
-            <div className="absolute inset-0 bg-gradient-to-br from-indigo-500/3 to-transparent rounded-2xl opacity-0 group-hover:opacity-100 transition-opacity duration-300 pointer-events-none" />
-            <div className="flex justify-between items-start">
-              <div>
-                <p className="text-sm text-zinc-400 font-medium">Total Opportunities</p>
-                <h3 className="text-4xl font-semibold mt-2 tracking-tight text-white">
-                  {isLoading ? <span className="text-zinc-700">--</span> : totalSubmissions}
-                </h3>
-                <p className="text-xs text-zinc-500 mt-2">Aggregated system bottlenecks</p>
-              </div>
-              <div className="p-3 bg-indigo-500/5 rounded-xl border border-indigo-500/10 text-indigo-400">
-                <Inbox className="h-5 w-5" />
-              </div>
+        {/* TOP KPI CARDS */}
+        <section className="grid grid-cols-2 md:grid-cols-5 gap-4 mb-8">
+          {[
+            { label: "Total Requests", count: totalRequests, color: "border-slate-200 text-slate-900 bg-white" },
+            { label: "New Requests", count: newRequests, color: "border-indigo-100 text-indigo-700 bg-indigo-50/20" },
+            { label: "Under Review", count: underReviewRequests, color: "border-amber-100 text-amber-700 bg-amber-50/20" },
+            { label: "Completed", count: completedRequests, color: "border-emerald-100 text-emerald-700 bg-emerald-50/20" },
+            { label: "Rejected", count: rejectedRequests, color: "border-rose-100 text-rose-700 bg-rose-50/20" },
+          ].map((kpi, idx) => (
+            <div
+              key={idx}
+              className={`rounded-2xl border p-4.5 shadow-sm transition-all hover:shadow-md ${kpi.color}`}
+            >
+              <span className="text-[10px] uppercase tracking-wider text-slate-400 font-bold block mb-1">
+                {kpi.label}
+              </span>
+              <span className="text-xl font-extrabold tracking-tight">
+                {isLoading ? "--" : kpi.count}
+              </span>
             </div>
-          </div>
-
-          {/* Card 2: Visible Submissions */}
-          <div className="group relative bg-zinc-950/40 border border-zinc-900 rounded-2xl p-6 hover:border-zinc-800 transition-all duration-300 backdrop-blur-md">
-            <div className="absolute inset-0 bg-gradient-to-br from-sky-500/3 to-transparent rounded-2xl opacity-0 group-hover:opacity-100 transition-opacity duration-300 pointer-events-none" />
-            <div className="flex justify-between items-start">
-              <div>
-                <p className="text-sm text-zinc-400 font-medium">Filtered & Visible</p>
-                <h3 className="text-4xl font-semibold mt-2 tracking-tight text-white">
-                  {isLoading ? <span className="text-zinc-700">--</span> : visibleSubmissions}
-                </h3>
-                <p className="text-xs text-zinc-500 mt-2">Matching your active selection</p>
-              </div>
-              <div className="p-3 bg-sky-500/5 rounded-xl border border-sky-500/10 text-sky-400">
-                <Filter className="h-5 w-5" />
-              </div>
-            </div>
-          </div>
-
-          {/* Card 3: High Frequency Requests */}
-          <div className="group relative bg-zinc-950/40 border border-zinc-900 rounded-2xl p-6 hover:border-zinc-800 transition-all duration-300 backdrop-blur-md">
-            <div className="absolute inset-0 bg-gradient-to-br from-amber-500/3 to-transparent rounded-2xl opacity-0 group-hover:opacity-100 transition-opacity duration-300 pointer-events-none" />
-            <div className="flex justify-between items-start">
-              <div>
-                <p className="text-sm text-zinc-400 font-medium">High Frequency Hotspots</p>
-                <h3 className={`text-4xl font-semibold mt-2 tracking-tight ${highFrequencySubmissions > 0 ? "text-amber-400" : "text-white"}`}>
-                  {isLoading ? <span className="text-zinc-700">--</span> : highFrequencySubmissions}
-                </h3>
-                <p className="text-xs text-zinc-500 mt-2">Daily or multiple-times-daily tasks</p>
-              </div>
-              <div className={`p-3 rounded-xl border transition-colors duration-300 ${highFrequencySubmissions > 0 ? "bg-amber-500/10 border-amber-500/20 text-amber-400" : "bg-zinc-900/50 border-zinc-800 text-zinc-400"}`}>
-                <Flame className="h-5 w-5" />
-              </div>
-            </div>
-          </div>
-
+          ))}
         </section>
 
-        {/* SEARCH AND FILTERS */}
-        <section className="bg-zinc-900/40 border border-zinc-900 rounded-2xl p-4 sm:p-5 mb-8 backdrop-blur-md">
-          <div className="flex items-center gap-2 mb-4 text-xs font-semibold text-zinc-400 uppercase tracking-wider">
-            <SlidersHorizontal className="h-3.5 w-3.5 text-zinc-500" />
-            <span>Search & Queue Filters</span>
-          </div>
-
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+        {/* MAIN BODY GRID */}
+        <div className="grid grid-cols-1 lg:grid-cols-4 gap-8 mb-12">
+          
+          {/* SIDEBAR FILTERS (DESKTOP) */}
+          <aside className="hidden lg:block lg:col-span-1 bg-white border border-slate-200 rounded-3xl p-5 shadow-sm self-start">
+            <div className="flex items-center gap-2 mb-4 text-[10px] font-bold text-slate-400 uppercase tracking-wider">
+              <SlidersHorizontal className="h-3.5 w-3.5 text-slate-400" />
+              <span>Triage Filters</span>
+            </div>
             
-            {/* Search Input */}
-            <div className="relative">
-              <label className="text-[10px] uppercase tracking-wider text-zinc-500 font-bold block mb-1.5">
+            {/* Direct Quick Keyword Search */}
+            <div className="mb-5">
+              <label className="text-[10px] uppercase font-bold text-slate-400 block mb-1.5">
                 Keyword Search
               </label>
               <div className="relative">
-                <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-zinc-500" />
+                <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-slate-400" />
                 <input
                   type="text"
-                  placeholder="Search outcomes, systems..."
+                  placeholder="Search queue..."
                   value={searchQuery}
                   onChange={(e) => setSearchQuery(e.target.value)}
-                  className="w-full bg-zinc-950/80 border border-zinc-800 focus:border-zinc-700 rounded-xl pl-9 pr-4 py-2.5 text-sm text-zinc-200 placeholder-zinc-600 focus:outline-none transition-all duration-200"
+                  className="w-full bg-slate-50 border border-slate-200 focus:border-blue-500 focus:bg-white rounded-lg pl-8 pr-3 py-2 text-xs text-slate-800 placeholder-slate-400 outline-none transition shadow-sm"
                 />
               </div>
             </div>
 
-            {/* Department Filter */}
-            <div>
-              <label className="text-[10px] uppercase tracking-wider text-zinc-500 font-bold block mb-1.5">
-                Department
-              </label>
-              <select
-                value={department}
-                onChange={(e) => setDepartment(e.target.value)}
-                className="w-full bg-zinc-950/80 border border-zinc-800 focus:border-zinc-700 rounded-xl px-3 py-2.5 text-sm text-zinc-200 focus:outline-none transition-all duration-200 cursor-pointer"
+            <FilterFormControls />
+          </aside>
+
+          {/* TABLE & DATA PANEL */}
+          <section className="lg:col-span-3 space-y-6">
+            
+            {/* COLLAPSIBLE MOBILE FILTERS PANEL */}
+            <div className="lg:hidden bg-white border border-slate-200 rounded-2xl p-4 shadow-sm">
+              <button
+                onClick={() => setShowMobileFilters(!showMobileFilters)}
+                className="flex items-center justify-between w-full text-xs font-bold text-slate-700"
               >
-                {availableDepartments.map((dept) => (
-                  <option key={dept} value={dept}>
-                    {dept}
-                  </option>
-                ))}
-              </select>
-            </div>
-
-            {/* Support Type Filter */}
-            <div>
-              <label className="text-[10px] uppercase tracking-wider text-zinc-500 font-bold block mb-1.5">
-                Expected Support
-              </label>
-              <select
-                value={supportType}
-                onChange={(e) => setSupportType(e.target.value)}
-                className="w-full bg-zinc-950/80 border border-zinc-800 focus:border-zinc-700 rounded-xl px-3 py-2.5 text-sm text-zinc-200 focus:outline-none transition-all duration-200 cursor-pointer"
-              >
-                {availableSupportTypes.map((type) => (
-                  <option key={type} value={type}>
-                    {type === "All" ? "All Types" : type}
-                  </option>
-                ))}
-              </select>
-            </div>
-
-            {/* Client-side Sorting */}
-            <div>
-              <label className="text-[10px] uppercase tracking-wider text-zinc-500 font-bold block mb-1.5 flex items-center gap-1">
-                <ArrowUpDown className="h-3 w-3 text-zinc-500" />
-                <span>Sort Order</span>
-              </label>
-              <select
-                value={sortBy}
-                onChange={(e) => setSortBy(e.target.value as any)}
-                className="w-full bg-zinc-950/80 border border-zinc-800 focus:border-zinc-700 rounded-xl px-3 py-2.5 text-sm text-zinc-200 focus:outline-none transition-all duration-200 cursor-pointer"
-              >
-                <option value="newest">Newest First</option>
-                <option value="oldest">Oldest First</option>
-                <option value="frequency">High Frequency First</option>
-              </select>
-            </div>
-
-          </div>
-        </section>
-
-        {/* LOADING INDICATOR */}
-        {isLoading && (
-          <div className="flex flex-col items-center justify-center py-20 text-zinc-500 gap-4">
-            <RefreshCw className="h-8 w-8 animate-spin text-zinc-400" />
-            <p className="text-sm font-medium">Fetching incoming AI intake queue...</p>
-          </div>
-        )}
-
-        {/* EMPTY STATE */}
-        {!isLoading && sortedSubmissions.length === 0 && (
-          <div className="bg-zinc-950/20 border border-zinc-900 rounded-3xl p-16 text-center max-w-lg mx-auto mt-8">
-            <Layers className="h-10 w-10 text-zinc-600 mx-auto mb-4" />
-            <h4 className="text-lg font-semibold text-zinc-300">No submissions found</h4>
-            <p className="text-zinc-500 text-sm mt-2">
-              Try adjusting your keyword search, department, or support filters to locate matching entries.
-            </p>
-          </div>
-        )}
-
-        {/* SUBMISSION CARDS LIST */}
-        {!isLoading && sortedSubmissions.length > 0 && (
-          <motion.div 
-            layout 
-            className="grid grid-cols-1 md:grid-cols-2 gap-6"
-          >
-            <AnimatePresence mode="popLayout">
-              {sortedSubmissions.map((submission) => {
-                const smartBadges = getSmartBadges(submission);
-                return (
-                  <motion.article
-                    layout
-                    key={submission.id}
-                    initial={{ opacity: 0, y: 15 }}
-                    animate={{ opacity: 1, y: 0 }}
-                    exit={{ opacity: 0, y: -15 }}
-                    transition={{ duration: 0.25 }}
-                    className="group relative rounded-3xl border border-zinc-900 bg-zinc-950/45 p-6 hover:border-zinc-800 hover:bg-zinc-900/10 transition-all duration-300 backdrop-blur-md shadow-xl flex flex-col justify-between"
+                <span className="flex items-center gap-2">
+                  <Filter className="h-4 w-4 text-blue-600" />
+                  triage filter panel
+                </span>
+                <ChevronDown className={`h-4 w-4 text-slate-400 transition-transform ${showMobileFilters ? "rotate-180" : ""}`} />
+              </button>
+              
+              <AnimatePresence>
+                {showMobileFilters && (
+                  <motion.div
+                    initial={{ height: 0, opacity: 0 }}
+                    animate={{ height: "auto", opacity: 1 }}
+                    exit={{ height: 0, opacity: 0 }}
+                    className="overflow-hidden mt-4 pt-4 border-t border-slate-100"
                   >
-                    {/* Glowing hover accent */}
-                    <div className="absolute inset-0 bg-gradient-to-r from-zinc-800/3 to-zinc-700/3 rounded-3xl opacity-0 group-hover:opacity-100 transition-opacity duration-300 pointer-events-none" />
+                    {/* Keyword search on mobile */}
+                    <div className="mb-4">
+                      <label className="text-[10px] uppercase font-bold text-slate-400 block mb-1.5">
+                        Keyword Search
+                      </label>
+                      <div className="relative">
+                        <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-slate-400" />
+                        <input
+                          type="text"
+                          placeholder="Search opportunities..."
+                          value={searchQuery}
+                          onChange={(e) => setSearchQuery(e.target.value)}
+                          className="w-full bg-slate-50 border border-slate-200 focus:border-blue-500 focus:bg-white rounded-lg pl-8 pr-3 py-2 text-xs text-slate-800 placeholder-slate-400 outline-none transition shadow-sm"
+                        />
+                      </div>
+                    </div>
 
-                    <div>
-                      {/* Top Header Row (Department & Dynamic smart badges) */}
-                      <div className="flex flex-wrap items-center justify-between gap-3 mb-4">
-                        <span className="px-2.5 py-1 rounded-lg text-xs font-semibold bg-zinc-900 text-zinc-300 border border-zinc-800 group-hover:border-zinc-700/80 transition-colors">
-                          {submission.department}
-                        </span>
+                    <FilterFormControls />
+                  </motion.div>
+                )}
+              </AnimatePresence>
+            </div>
 
-                        {/* Smart Badges Flexbox */}
-                        {smartBadges.length > 0 && (
-                          <div className="flex flex-wrap gap-1.5">
-                            {smartBadges.map((badge) => {
-                              const BadgeIcon = badge.icon;
-                              return (
-                                <span
-                                  key={badge.id}
-                                  className={`inline-flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-medium border ${badge.bg}`}
-                                  title={badge.label}
+            {/* ACTIVE FILTER CHIPS */}
+            {(selectedDept !== "All" || selectedStatus !== "All" || selectedSupport !== "All" || selectedFrequency !== "All" || selectedDateRange !== "All") && (
+              <div className="flex flex-wrap items-center gap-2 bg-white border border-slate-200 rounded-2xl p-4.5 shadow-sm">
+                <span className="text-[10px] uppercase font-bold text-slate-400 tracking-wider mr-1">Active Filters:</span>
+                {selectedDept !== "All" && (
+                  <span className="inline-flex items-center gap-1 bg-blue-50 text-blue-700 px-3 py-1 rounded-full text-[10px] font-bold border border-blue-100">
+                    Dept: {selectedDept}
+                    <button onClick={() => setSelectedDept("All")} className="hover:text-blue-900 cursor-pointer ml-1 text-sm font-semibold">&times;</button>
+                  </span>
+                )}
+                {selectedStatus !== "All" && (
+                  <span className="inline-flex items-center gap-1 bg-blue-50 text-blue-700 px-3 py-1 rounded-full text-[10px] font-bold border border-blue-100">
+                    Status: {selectedStatus}
+                    <button onClick={() => setSelectedStatus("All")} className="hover:text-blue-900 cursor-pointer ml-1 text-sm font-semibold">&times;</button>
+                  </span>
+                )}
+                {selectedSupport !== "All" && (
+                  <span className="inline-flex items-center gap-1 bg-blue-50 text-blue-700 px-3 py-1 rounded-full text-[10px] font-bold border border-blue-100">
+                    Support: {selectedSupport}
+                    <button onClick={() => setSelectedSupport("All")} className="hover:text-blue-900 cursor-pointer ml-1 text-sm font-semibold">&times;</button>
+                  </span>
+                )}
+                {selectedFrequency !== "All" && (
+                  <span className="inline-flex items-center gap-1 bg-blue-50 text-blue-700 px-3 py-1 rounded-full text-[10px] font-bold border border-blue-100">
+                    Frequency: {selectedFrequency}
+                    <button onClick={() => setSelectedFrequency("All")} className="hover:text-blue-900 cursor-pointer ml-1 text-sm font-semibold">&times;</button>
+                  </span>
+                )}
+                {selectedDateRange !== "All" && (
+                  <span className="inline-flex items-center gap-1 bg-blue-50 text-blue-700 px-3 py-1 rounded-full text-[10px] font-bold border border-blue-100">
+                    Date: {selectedDateRange === "7days" ? "Last 7 Days" : "Last 30 Days"}
+                    <button onClick={() => setSelectedDateRange("All")} className="hover:text-blue-900 cursor-pointer ml-1 text-sm font-semibold">&times;</button>
+                  </span>
+                )}
+                <button
+                  onClick={() => {
+                    setSelectedDept("All");
+                    setSelectedStatus("All");
+                    setSelectedSupport("All");
+                    setSelectedFrequency("All");
+                    setSelectedDateRange("All");
+                  }}
+                  className="text-[10px] text-blue-600 hover:text-blue-800 font-bold ml-1 transition cursor-pointer"
+                >
+                  Clear All Filters
+                </button>
+              </div>
+            )}
+
+            {/* ERROR STATE */}
+            {errorMessage && (
+              <div className="rounded-xl border border-rose-200 bg-rose-50 px-4 py-3 text-xs font-semibold text-rose-800 shadow-sm">
+                {errorMessage}
+              </div>
+            )}
+
+            {/* LOADING INDICATOR */}
+            {isLoading && (
+              <div className="flex flex-col items-center justify-center py-20 text-slate-400 gap-4 bg-white border border-slate-200 rounded-3xl shadow-sm">
+                <RefreshCw className="h-8 w-8 animate-spin text-blue-600" />
+                <p className="text-sm font-bold text-slate-500">Loading incoming opportunities queue...</p>
+              </div>
+            )}
+
+            {/* EMPTY STATE */}
+            {!isLoading && sortedSubmissions.length === 0 && (
+              <div className="bg-white border border-slate-200 rounded-3xl p-16 text-center max-w-lg mx-auto shadow-sm">
+                <Inbox className="h-10 w-10 text-slate-300 mx-auto mb-4" />
+                <h4 className="text-sm font-bold text-slate-700">No submissions found</h4>
+                <p className="text-slate-400 text-[11px] mt-2 leading-relaxed">
+                  Try adjusting your search queries or filter attributes to locate the desired opportunity records.
+                </p>
+              </div>
+            )}
+
+            {/* DATA VIEW CONTAINER */}
+            {!isLoading && sortedSubmissions.length > 0 && (
+              <div className="space-y-6">
+                
+                {/* 1. TABLE VIEW FOR DESKTOP & TABLETS (md:block) */}
+                <div className="hidden md:block bg-white border border-slate-200 rounded-3xl overflow-hidden shadow-sm overflow-x-auto relative max-h-[640px]">
+                  <table className="w-full text-left border-collapse min-w-[1000px] table-fixed">
+                    <thead className="sticky top-0 bg-slate-50 z-20 shadow-[0_1px_0_0_rgba(226,232,240,1)]">
+                      <tr className="text-[10px] uppercase tracking-wider text-slate-400 font-extrabold">
+                        <th className="px-6 py-4 cursor-pointer hover:bg-slate-100 w-[160px]" onClick={() => handleSort("employee_name")}>
+                          <span className="flex items-center gap-1.5">
+                            Employee Name
+                            <ArrowUpDown className="h-3 w-3 text-slate-400" />
+                          </span>
+                        </th>
+                        <th className="px-4 py-4 cursor-pointer hover:bg-slate-100 w-[140px]" onClick={() => handleSort("department")}>
+                          <span className="flex items-center gap-1.5">
+                            Department
+                            <ArrowUpDown className="h-3 w-3 text-slate-400" />
+                          </span>
+                        </th>
+                        <th className="px-4 py-4 cursor-pointer hover:bg-slate-100 w-[200px]" onClick={() => handleSort("affected_area")}>
+                          <span className="flex items-center gap-1.5">
+                            Affected Area
+                            <ArrowUpDown className="h-3 w-3 text-slate-400" />
+                          </span>
+                        </th>
+                        <th className="px-4 py-4 cursor-pointer hover:bg-slate-100 w-[180px]" onClick={() => handleSort("support_type")}>
+                          <span className="flex items-center gap-1.5">
+                            Support Type
+                            <ArrowUpDown className="h-3 w-3 text-slate-400" />
+                          </span>
+                        </th>
+                        <th className="px-4 py-4 cursor-pointer hover:bg-slate-100 w-[140px]" onClick={() => handleSort("frequency")}>
+                          <span className="flex items-center gap-1.5">
+                            Frequency
+                            <ArrowUpDown className="h-3 w-3 text-slate-400" />
+                          </span>
+                        </th>
+                        <th className="px-4 py-4 cursor-pointer hover:bg-slate-100 w-[100px]" onClick={() => handleSort("urgency")}>
+                          <span className="flex items-center gap-1.5">
+                            Urgency
+                            <ArrowUpDown className="h-3 w-3 text-slate-400" />
+                          </span>
+                        </th>
+                        <th className="px-4 py-4 cursor-pointer hover:bg-slate-100 w-[130px]" onClick={() => handleSort("created_at")}>
+                          <span className="flex items-center gap-1.5">
+                            Created Date
+                            <ArrowUpDown className="h-3 w-3 text-slate-400" />
+                          </span>
+                        </th>
+                        <th className="px-6 py-4 cursor-pointer hover:bg-slate-100 w-[150px]" onClick={() => handleSort("status")}>
+                          <span className="flex items-center gap-1.5">
+                            Status
+                            <ArrowUpDown className="h-3 w-3 text-slate-400" />
+                          </span>
+                        </th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-100 text-[11px] font-medium">
+                      {paginatedSubmissions.map((sub) => {
+                        const employeeName = getEmployeeName(sub);
+                        const activeStatus = sub.status || "New";
+
+                        // Parse properties dynamically
+                        let recordUrgency = "Medium";
+                        let recordSupport = sub.expected_support || "Not Specified";
+                        try {
+                          const parsed = JSON.parse(sub.desired_outcome || "");
+                          recordUrgency = parsed.urgency || "Medium";
+                          recordSupport = parsed.expected_support || recordSupport;
+                        } catch (e) {}
+
+                        // Triage urgency colors
+                        const urgencyStyle = 
+                          recordUrgency === "Critical" ? "bg-rose-50 text-rose-700 border-rose-200" :
+                          recordUrgency === "High" ? "bg-amber-50 text-amber-700 border-amber-200" :
+                          recordUrgency === "Medium" ? "bg-blue-50 text-blue-700 border-blue-200" :
+                          "bg-slate-50 text-slate-700 border-slate-200";
+
+                        let affectedAreaText = "";
+                        if (Array.isArray(sub.affected_area)) {
+                          affectedAreaText = sub.affected_area.join(", ");
+                        } else {
+                          affectedAreaText = sub.affected_area || "";
+                        }
+
+                        return (
+                          <tr 
+                            key={sub.id}
+                            className="hover:bg-slate-50/70 transition cursor-pointer group"
+                            onClick={() => setSelectedSubmission(sub)}
+                          >
+                            {/* Name */}
+                            <td className="px-6 py-4 font-bold text-slate-900 truncate" title={employeeName}>
+                              {employeeName}
+                            </td>
+
+                            {/* Department */}
+                            <td className="px-4 py-4 text-slate-500 truncate" title={sub.department}>
+                              {sub.department}
+                            </td>
+
+                            {/* Affected Area */}
+                            <td className="px-4 py-4 text-slate-600 truncate" title={affectedAreaText}>
+                              {affectedAreaText || "Not Specified"}
+                            </td>
+
+                            {/* Support Requested */}
+                            <td className="px-4 py-4 text-slate-600 truncate" title={recordSupport}>
+                              {recordSupport}
+                            </td>
+
+                            {/* Frequency */}
+                            <td className="px-4 py-4 text-slate-500 truncate" title={sub.frequency}>
+                              {sub.frequency}
+                            </td>
+
+                            {/* Urgency */}
+                            <td className="px-4 py-4">
+                              <span className={`inline-flex rounded-full border px-2 py-0.5 text-[9px] font-bold ${urgencyStyle}`}>
+                                {recordUrgency}
+                              </span>
+                            </td>
+
+                            {/* Created Date */}
+                            <td className="px-4 py-4 text-slate-500 font-mono text-[10px] truncate">
+                              {formatDate(sub.created_at)}
+                            </td>
+
+                            {/* Status select box inline */}
+                            <td className="px-6 py-4" onClick={(e) => e.stopPropagation()}>
+                              <div className="relative">
+                                <select
+                                  value={activeStatus}
+                                  onChange={(e) => updateSubmissionField(sub.id, "status", e.target.value)}
+                                  className={`rounded-full border px-2.5 py-1 text-[9px] font-bold outline-none cursor-pointer shadow-sm transition hover:scale-[1.01] ${statusColors[activeStatus] || statusColors["New"]}`}
                                 >
-                                  <BadgeIcon className="h-3 w-3 shrink-0" />
-                                  {badge.label}
-                                </span>
-                              );
-                            })}
+                                  <option value="New">New</option>
+                                  <option value="Under Review">Under Review</option>
+                                  <option value="Approved">Approved</option>
+                                  <option value="Completed">Completed</option>
+                                  <option value="Rejected">Rejected</option>
+                                </select>
+                              </div>
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+
+                {/* 2. CARD VIEW STACKED FOR MOBILE DEVICES (block md:hidden) */}
+                <div className="block md:hidden space-y-4">
+                  {paginatedSubmissions.map((sub) => {
+                    const employeeName = getEmployeeName(sub);
+                    const activeStatus = sub.status || "New";
+
+                    // Parse properties dynamically
+                    let recordUrgency = "Medium";
+                    let recordSupport = sub.expected_support || "Not Specified";
+                    try {
+                      const parsed = JSON.parse(sub.desired_outcome || "");
+                      recordUrgency = parsed.urgency || "Medium";
+                      recordSupport = parsed.expected_support || recordSupport;
+                    } catch (e) {}
+
+                    const urgencyStyle = 
+                      recordUrgency === "Critical" ? "bg-rose-50 text-rose-700 border-rose-200" :
+                      recordUrgency === "High" ? "bg-amber-50 text-amber-700 border-amber-200" :
+                      recordUrgency === "Medium" ? "bg-blue-50 text-blue-700 border-blue-200" :
+                      "bg-slate-50 text-slate-700 border-slate-200";
+
+                    return (
+                      <div 
+                        key={sub.id}
+                        onClick={() => setSelectedSubmission(sub)}
+                        className="bg-white border border-slate-200 rounded-2xl p-4 shadow-sm hover:border-slate-300 transition cursor-pointer space-y-3"
+                      >
+                        <div className="flex justify-between items-start">
+                          <div>
+                            <h4 className="font-bold text-slate-900 text-xs">{employeeName}</h4>
+                            <p className="text-[10px] text-slate-400 font-semibold">{sub.department} &bull; {formatDate(sub.created_at)}</p>
                           </div>
-                        )}
+                          <span className={`inline-flex rounded-full border px-2 py-0.5 text-[9px] font-bold ${urgencyStyle}`}>
+                            {recordUrgency}
+                          </span>
+                        </div>
+
+                        <div className="grid grid-cols-2 gap-2 text-[10px] bg-slate-50 rounded-xl p-2.5 border border-slate-100">
+                          <div>
+                            <span className="block text-slate-400 font-bold uppercase text-[8px] tracking-wide">Affected Area</span>
+                            <span className="text-slate-700 font-semibold">{Array.isArray(sub.affected_area) ? sub.affected_area.join(", ") : (sub.affected_area || "N/A")}</span>
+                          </div>
+                          <div>
+                            <span className="block text-slate-400 font-bold uppercase text-[8px] tracking-wide">Support Type</span>
+                            <span className="text-slate-700 font-semibold">{recordSupport}</span>
+                          </div>
+                        </div>
+
+                        <div className="flex justify-between items-center pt-1" onClick={(e) => e.stopPropagation()}>
+                          <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wide">Triage Status:</span>
+                          <select
+                            value={activeStatus}
+                            onChange={(e) => updateSubmissionField(sub.id, "status", e.target.value)}
+                            className={`rounded-full border px-2.5 py-1 text-[9px] font-bold outline-none cursor-pointer shadow-sm ${statusColors[activeStatus] || statusColors["New"]}`}
+                          >
+                            <option value="New">New</option>
+                            <option value="Under Review">Under Review</option>
+                            <option value="Approved">Approved</option>
+                            <option value="Completed">Completed</option>
+                            <option value="Rejected">Rejected</option>
+                          </select>
+                        </div>
                       </div>
+                    );
+                  })}
+                </div>
 
-                      {/* Affected Area Header */}
-                      <div className="mb-4">
-                        <h2 className="text-xl sm:text-2xl font-semibold tracking-tight text-white group-hover:text-transparent group-hover:bg-clip-text group-hover:bg-gradient-to-r group-hover:from-white group-hover:to-zinc-300 transition-all">
-                          {submission.affected_area}
-                        </h2>
-                        
-                        {/* Outcome Highlight Box */}
-                        <div className="mt-3 bg-zinc-950/60 border border-zinc-900 rounded-xl p-3.5">
-                          <p className="text-[10px] uppercase tracking-wider text-zinc-500 font-bold mb-1">
-                            Desired Outcome
-                          </p>
-                          <p className="text-zinc-200 text-sm font-medium italic leading-relaxed">
-                            &ldquo;{submission.desired_outcome}&rdquo;
-                          </p>
-                        </div>
-                      </div>
+                {/* PAGINATION CONTROLS */}
+                <div className="flex flex-col sm:flex-row items-center justify-between gap-4 bg-white border border-slate-200 px-6 py-4 rounded-3xl shadow-sm">
+                  <div className="text-xs text-slate-500 font-medium">
+                    Showing <span className="font-bold text-slate-800">{(currentPage - 1) * itemsPerPage + 1}</span> to{" "}
+                    <span className="font-bold text-slate-800">
+                      {Math.min(currentPage * itemsPerPage, sortedSubmissions.length)}
+                    </span>{" "}
+                    of <span className="font-bold text-slate-800">{sortedSubmissions.length}</span> opportunities
+                  </div>
 
-                      {/* Detail Metrics Grid */}
-                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 my-5 pt-4 border-t border-zinc-900/60 text-xs">
-                        
-                        {/* Current Work */}
-                        <div className="flex gap-2">
-                          <Activity className="h-4 w-4 text-zinc-500 shrink-0 mt-0.5" />
-                          <div>
-                            <span className="text-zinc-500 block font-medium">Current Work</span>
-                            <span className="text-zinc-300 font-medium">{submission.work_type}</span>
-                          </div>
-                        </div>
-
-                        {/* Friction Blocker */}
-                        <div className="flex gap-2">
-                          <AlertTriangle className="h-4 w-4 text-zinc-500 shrink-0 mt-0.5" />
-                          <div>
-                            <span className="text-zinc-500 block font-medium">Biggest Friction</span>
-                            <span className="text-zinc-300 font-medium">{submission.friction}</span>
-                          </div>
-                        </div>
-
-                        {/* Frequency */}
-                        <div className="flex gap-2">
-                          <Clock className="h-4 w-4 text-zinc-500 shrink-0 mt-0.5" />
-                          <div>
-                            <span className="text-zinc-500 block font-medium">Frequency</span>
-                            <span className="text-zinc-300 font-medium">{submission.frequency}</span>
-                          </div>
-                        </div>
-
-                        {/* Expected Support */}
-                        <div className="flex gap-2">
-                          <Wrench className="h-4 w-4 text-zinc-500 shrink-0 mt-0.5" />
-                          <div>
-                            <span className="text-zinc-500 block font-medium">Expected Support</span>
-                            <span className="text-zinc-300 font-medium">{submission.expected_support}</span>
-                          </div>
-                        </div>
-
-                      </div>
+                  <div className="flex items-center gap-2">
+                    <button
+                      onClick={() => setCurrentPage((prev) => Math.max(prev - 1, 1))}
+                      disabled={currentPage === 1}
+                      className="flex items-center gap-1 rounded-xl bg-white border border-slate-200 hover:bg-slate-50 text-slate-700 px-3.5 py-2 text-xs font-bold shadow-sm transition disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer"
+                    >
+                      <ArrowLeft className="h-3.5 w-3.5" />
+                      Previous
+                    </button>
+                    
+                    <div className="flex items-center gap-1 max-w-[120px] overflow-x-auto sm:max-w-none">
+                      {Array.from({ length: totalPages }, (_, i) => i + 1).map((page) => (
+                        <button
+                          key={page}
+                          onClick={() => setCurrentPage(page)}
+                          className={`px-2.5 py-1.5 rounded-lg text-xs font-bold transition cursor-pointer shrink-0 ${
+                            currentPage === page
+                              ? "bg-blue-600 text-white shadow-sm shadow-blue-500/10"
+                              : "bg-white border border-slate-200 hover:bg-slate-50 text-slate-700"
+                          }`}
+                        >
+                          {page}
+                        </button>
+                      ))}
                     </div>
 
-                    {/* Footer Row (Systems Involved & Dates) */}
-                    <div className="pt-4 border-t border-zinc-900/60 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
-                      
-                      {/* Systems Chips */}
-                      <div className="flex flex-wrap gap-1.5 items-center">
-                        <Database className="h-3.5 w-3.5 text-zinc-500 shrink-0" />
-                        {submission.systems_involved && submission.systems_involved.length > 0 ? (
-                          submission.systems_involved.map((system) => (
-                            <span
-                              key={system}
-                              className="px-2 py-0.5 rounded bg-zinc-900/60 border border-zinc-800 text-[10px] text-zinc-400 font-medium"
-                            >
-                              {system}
-                            </span>
-                          ))
-                        ) : (
-                          <span className="text-zinc-500 text-[10px]">No connected systems</span>
-                        )}
-                      </div>
+                    <button
+                      onClick={() => setCurrentPage((prev) => Math.min(prev + 1, totalPages))}
+                      disabled={currentPage === totalPages || totalPages === 0}
+                      className="flex items-center gap-1 rounded-xl bg-white border border-slate-200 hover:bg-slate-50 text-slate-700 px-3.5 py-2 text-xs font-bold shadow-sm transition disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer"
+                    >
+                      Next
+                      <ArrowRight className="h-3.5 w-3.5" />
+                    </button>
+                  </div>
+                </div>
 
-                      {/* Timestamps */}
-                      <div className="flex items-center gap-1.5 text-zinc-500 font-mono text-[10px] ml-auto sm:ml-0">
-                        <Calendar className="h-3.5 w-3.5 text-zinc-600" />
-                        <span>{formatDate(submission.created_at)}</span>
-                        {submission.created_at && (
-                          <>
-                            <span>·</span>
-                            <span className="text-indigo-400/80 font-medium">
-                              {getRelativeTime(submission.created_at)}
-                            </span>
-                          </>
-                        )}
-                      </div>
+              </div>
+            )}
+            
+          </section>
+        </div>
 
+        {/* TOAST NOTIFICATION CONTAINER */}
+        <AnimatePresence>
+          {toast && (
+            <motion.div
+              initial={{ opacity: 0, y: 50, scale: 0.95 }}
+              animate={{ opacity: 1, y: 0, scale: 1 }}
+              exit={{ opacity: 0, y: 20, scale: 0.95 }}
+              className={`fixed bottom-6 right-6 z-[100] flex items-center gap-2.5 rounded-2xl px-4 py-3.5 shadow-xl border text-xs font-semibold backdrop-blur-md transition-all duration-300 ${
+                toast.type === "success"
+                  ? "bg-emerald-50/95 text-emerald-800 border-emerald-200"
+                  : "bg-rose-50/90 text-rose-800 border-rose-200"
+              }`}
+            >
+              {toast.type === "success" ? (
+                <CheckCircle2 className="h-4.5 w-4.5 text-emerald-600 shrink-0" />
+              ) : (
+                <AlertTriangle className="h-4.5 w-4.5 text-rose-600 shrink-0" />
+              )}
+              <span>{toast.message}</span>
+            </motion.div>
+          )}
+        </AnimatePresence>
+
+        {/* SUBMISSION DETAIL DRAWER OVERLAY */}
+        <AnimatePresence>
+          {selectedSubmission && (
+            <>
+              {/* Dark backdrop shadow overlay */}
+              <motion.div
+                initial={{ opacity: 0 }}
+                animate={{ opacity: 0.25 }}
+                exit={{ opacity: 0 }}
+                onClick={() => setSelectedSubmission(null)}
+                className="fixed inset-0 bg-black z-40"
+              />
+
+              {/* Drawer Container Panel */}
+              <motion.div
+                initial={{ x: "100%" }}
+                animate={{ x: 0 }}
+                exit={{ x: "100%" }}
+                transition={{ type: "tween", duration: 0.3 }}
+                className="fixed top-0 right-0 bottom-0 z-50 w-full max-w-2xl bg-white border-l border-slate-200 shadow-2xl p-6 overflow-y-auto flex flex-col justify-between"
+              >
+                {/* Header Section */}
+                <div className="shrink-0 flex items-center justify-between border-b border-slate-100 pb-4 mb-6">
+                  <div>
+                    <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400 block">
+                      colleague opportunity details
+                    </span>
+                    <h2 className="text-lg font-extrabold text-slate-900 tracking-tight mt-0.5">
+                      {getEmployeeName(selectedSubmission)}
+                    </h2>
+                  </div>
+                  
+                  <button
+                    onClick={() => setSelectedSubmission(null)}
+                    className="rounded-xl border border-slate-200 p-2 text-slate-400 hover:text-slate-700 hover:bg-slate-50 transition cursor-pointer"
+                  >
+                    <X className="h-4.5 w-4.5" />
+                  </button>
+                </div>
+
+                {/* Content Section */}
+                <div className="flex-1 space-y-6 min-h-0 overflow-y-auto pr-1 overscroll-contain scrollbar-thin">
+                  {/* Deserialize 15 questions or build fallback */}
+                  {(() => {
+                    let answers: any = null;
+                    try {
+                      answers = JSON.parse(selectedSubmission.desired_outcome || "");
+                    } catch (e) {
+                      // Fallback answers object mapped precisely from current database columns
+                      answers = {
+                        department: selectedSubmission.department,
+                        affected_area: Array.isArray(selectedSubmission.affected_area) 
+                          ? selectedSubmission.affected_area 
+                          : selectedSubmission.affected_area 
+                            ? selectedSubmission.affected_area.split(", ") 
+                            : [],
+                        pain_point_desc: selectedSubmission.friction || selectedSubmission.desired_outcome || "",
+                        friction: Array.isArray(selectedSubmission.work_type)
+                          ? selectedSubmission.work_type
+                          : selectedSubmission.work_type
+                            ? selectedSubmission.work_type.split(", ")
+                            : [],
+                        frequency: selectedSubmission.frequency,
+                        time_spent: "Not specified",
+                        people_impacted: selectedSubmission.people_impacted,
+                        business_impact: [],
+                        urgency: "Medium",
+                        systems_involved: selectedSubmission.systems_involved || [],
+                        information_involved: [],
+                        confidential_data: "Not Sure",
+                        desired_outcome_short: selectedSubmission.desired_outcome || "",
+                        expected_support: selectedSubmission.expected_support,
+                        solution_goals: []
+                      };
+                    }
+
+                    return (
+                      <div className="space-y-6">
+                        {sections.map((section, idx) => (
+                          <div key={section.id} className="rounded-2xl border border-slate-100 bg-slate-50/50 p-4.5">
+                            <h3 className="text-xs font-bold text-blue-900 uppercase tracking-wider border-b border-slate-200/50 pb-2 mb-3.5">
+                              Section {idx + 1}: {section.title}
+                            </h3>
+                            
+                            <div className="space-y-3.5">
+                              {section.questions.map((q) => {
+                                const val = answers[q.id];
+                                let displayVal = "Not specified";
+                                
+                                if (Array.isArray(val)) {
+                                  displayVal = val.map(v => v.startsWith("Other:") ? `Other (${v.substring(6).trim()})` : v).join(", ");
+                                } else if (val) {
+                                  displayVal = val.startsWith("Other:") ? `Other: ${val.substring(6).trim()}` : String(val);
+                                }
+
+                                return (
+                                  <div key={q.id} className="text-xs">
+                                    <span className="block font-bold text-slate-400 mb-1">{q.title}</span>
+                                    <span className="text-slate-800 font-semibold leading-relaxed block bg-white border border-slate-100 rounded-lg p-2.5 shadow-sm">
+                                      {displayVal || "Not specified"}
+                                    </span>
+                                  </div>
+                                );
+                              })}
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    );
+                  })()}
+
+                  {/* Administrative Tagging section */}
+                  <div className="border-t border-slate-100 pt-5">
+                    <h3 className="text-xs font-bold text-slate-400 uppercase tracking-wider mb-2.5">
+                      Administrative Tags
+                    </h3>
+                    <div className="flex flex-wrap gap-1.5">
+                      {AVAILABLE_TAGS.map((tag) => {
+                        const hasTag = (selectedSubmission.tags || []).includes(tag);
+                        return (
+                          <button
+                            key={tag}
+                            onClick={() => {
+                              const currentTags = selectedSubmission.tags || [];
+                              const nextTags = hasTag
+                                ? currentTags.filter((t) => t !== tag)
+                                : [...currentTags, tag];
+                              updateSubmissionField(selectedSubmission.id, "tags", nextTags);
+                            }}
+                            className={`rounded-lg px-2.5 py-1 text-xs font-semibold border transition cursor-pointer ${
+                              hasTag
+                                ? "bg-blue-50 text-blue-700 border-blue-200"
+                                : "bg-white text-slate-500 border-slate-200 hover:bg-slate-50"
+                            }`}
+                          >
+                            {tag}
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </div>
+
+                  {/* Collaborative Assignments */}
+                  <div className="grid grid-cols-2 gap-4 border-t border-slate-100 pt-5">
+                    {/* Owner assignment dropdown */}
+                    <div>
+                      <label className="text-xs font-bold text-slate-400 uppercase tracking-wider block mb-2">
+                        Assigned Technical Owner
+                      </label>
+                      <select
+                        value={selectedSubmission.assigned_owner || "Unassigned"}
+                        onChange={(e) => updateSubmissionField(selectedSubmission.id, "assigned_owner", e.target.value)}
+                        className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-2.5 text-xs text-slate-800 outline-none cursor-pointer transition"
+                      >
+                        {AVAILABLE_OWNERS.map((own) => (
+                          <option key={own} value={own}>{own}</option>
+                        ))}
+                      </select>
                     </div>
 
-                  </motion.article>
-                );
-              })}
-            </AnimatePresence>
-          </motion.div>
-        )}
+                    {/* Status selection */}
+                    <div>
+                      <label className="text-xs font-bold text-slate-400 uppercase tracking-wider block mb-2">
+                        Opportunity Triage Status
+                      </label>
+                      <select
+                        value={selectedSubmission.status || "New"}
+                        onChange={(e) => updateSubmissionField(selectedSubmission.id, "status", e.target.value)}
+                        className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-2.5 text-xs text-slate-800 outline-none cursor-pointer transition"
+                      >
+                        <option value="New">New</option>
+                        <option value="Under Review">Under Review</option>
+                        <option value="Approved">Approved</option>
+                        <option value="Completed">Completed</option>
+                        <option value="Rejected">Rejected</option>
+                      </select>
+                    </div>
+                  </div>
+
+                  {/* Collaborative Administrative Notes Feed */}
+                  <div className="border-t border-slate-100 pt-5">
+                    <NotesSection
+                      notes={selectedSubmission.admin_notes || []}
+                      onAddNote={(content) => {
+                        const newNoteObj: AdminNote = {
+                          id: "note-" + Date.now(),
+                          author: "Admin Coordinator",
+                          content,
+                          created_at: new Date().toISOString()
+                        };
+                        const nextNotes = [...(selectedSubmission.admin_notes || []), newNoteObj];
+                        updateSubmissionField(selectedSubmission.id, "admin_notes", nextNotes);
+                      }}
+                      onDeleteNote={(noteId) => {
+                        const nextNotes = (selectedSubmission.admin_notes || []).filter(n => n.id !== noteId);
+                        updateSubmissionField(selectedSubmission.id, "admin_notes", nextNotes);
+                      }}
+                    />
+                  </div>
+                </div>
+              </motion.div>
+            </>
+          )}
+        </AnimatePresence>
       </div>
     </main>
+  );
+}
+
+// Inlined NotesSection for 100% self-contained resilience and clean layout
+function NotesSection({
+  notes = [],
+  onAddNote,
+  onDeleteNote
+}: {
+  notes: AdminNote[];
+  onAddNote: (content: string) => void;
+  onDeleteNote: (noteId: string) => void;
+}) {
+  const [text, setText] = useState("");
+  const feedRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    feedRef.current?.scrollIntoView({ behavior: "smooth" });
+  }, [notes.length]);
+
+  const handleSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!text.trim()) return;
+    onAddNote(text.trim());
+    setText("");
+  };
+
+  return (
+    <div className="flex flex-col rounded-2xl border border-slate-100 bg-slate-50/50 overflow-hidden">
+      {/* Header */}
+      <div className="flex items-center gap-2 border-b border-slate-200/60 px-4 py-3 bg-slate-100/30">
+        <Activity className="size-4 text-blue-600" />
+        <span className="text-xs font-bold uppercase tracking-wider text-slate-500">
+          Admin Notes ({notes.length})
+        </span>
+      </div>
+
+      {/* Feed */}
+      <div className="p-4 space-y-3 max-h-[220px] overflow-y-auto overscroll-contain">
+        {notes.length === 0 ? (
+          <div className="text-center py-6 text-slate-400 text-xs font-medium">
+            No administrative notes captured yet.
+          </div>
+        ) : (
+          notes.map((note) => (
+            <div
+              key={note.id}
+              className="group relative rounded-xl border border-slate-200 bg-white p-3 hover:shadow-sm transition"
+            >
+              <div className="flex items-center justify-between mb-1 text-[10px]">
+                <div className="flex items-center gap-1.5 font-bold text-slate-800">
+                  <div className="flex size-4.5 items-center justify-center rounded-full bg-slate-100 text-slate-600 font-semibold border border-slate-200">
+                    <User className="size-2.5" />
+                  </div>
+                  <span>{note.author}</span>
+                </div>
+                
+                <div className="flex items-center gap-2 text-slate-400 font-medium">
+                  <span>
+                    {new Date(note.created_at).toLocaleDateString([], {
+                      month: "short",
+                      day: "numeric",
+                      hour: "2-digit",
+                      minute: "2-digit",
+                    })}
+                  </span>
+                  
+                  <button
+                    onClick={() => onDeleteNote(note.id)}
+                    className="opacity-0 group-hover:opacity-100 p-0.5 text-slate-400 hover:text-rose-600 rounded transition cursor-pointer"
+                    title="Delete Note"
+                  >
+                    <Trash2 className="size-3" />
+                  </button>
+                </div>
+              </div>
+              <p className="text-slate-600 leading-relaxed break-words pl-1 text-[11px] font-medium">
+                {note.content}
+              </p>
+            </div>
+          ))
+        )}
+        <div ref={feedRef} />
+      </div>
+
+      {/* Form */}
+      <form onSubmit={handleSubmit} className="border-t border-slate-200/60 p-3 bg-white">
+        <div className="relative flex items-center">
+          <input
+            type="text"
+            value={text}
+            onChange={(e) => setText(e.target.value)}
+            placeholder="Add a collaborative notes log..."
+            className="w-full rounded-xl border border-slate-200 bg-slate-50 py-2 pl-3 pr-10 text-xs text-slate-800 placeholder-slate-400 outline-none transition focus:border-blue-500 focus:bg-white shadow-inner"
+          />
+          <button
+            type="submit"
+            disabled={!text.trim()}
+            className="absolute right-2 p-1.5 rounded-lg text-slate-400 hover:text-blue-600 disabled:opacity-30 disabled:hover:text-slate-400 transition cursor-pointer"
+          >
+            <Send className="size-3.5" />
+          </button>
+        </div>
+      </form>
+    </div>
   );
 }

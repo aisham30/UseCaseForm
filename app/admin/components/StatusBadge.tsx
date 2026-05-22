@@ -37,6 +37,11 @@ export default function StatusBadge({ status, className = "" }: StatusBadgeProps
       icon: Zap,
       style: "bg-violet-500/10 text-violet-400 border-violet-500/20 shadow-[0_0_12px_rgba(139,92,246,0.05)]",
     },
+    "Completed": {
+      label: "Completed",
+      icon: CheckCircle2,
+      style: "bg-emerald-500/10 text-emerald-400 border-emerald-500/20 shadow-[0_0_12px_rgba(16,185,129,0.05)]",
+    },
   };
 
   const activeConfig = config[status] || config["New"];

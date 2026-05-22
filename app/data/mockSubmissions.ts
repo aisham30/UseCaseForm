@@ -3,6 +3,7 @@ import { type AdminSubmission } from "../lib/supabase";
 export const mockSubmissions: AdminSubmission[] = [
   {
     id: "sub-101",
+    employee_name: "Aisha Mendonsa",
     department: "R&D",
     affected_area: "Documentation",
     work_type: "Searching through files/data",
@@ -27,6 +28,7 @@ export const mockSubmissions: AdminSubmission[] = [
   },
   {
     id: "sub-102",
+    employee_name: "Amit Patel",
     department: "Sales",
     affected_area: "Operations",
     work_type: "Copy-pasting between systems",
@@ -51,6 +53,7 @@ export const mockSubmissions: AdminSubmission[] = [
   },
   {
     id: "sub-103",
+    employee_name: "Dr. Helen Vance",
     department: "Finance",
     affected_area: "Reporting",
     work_type: "Preparing recurring reports",
@@ -75,6 +78,7 @@ export const mockSubmissions: AdminSubmission[] = [
   },
   {
     id: "sub-104",
+    employee_name: "Sanjay Shah",
     department: "HR",
     affected_area: "Approvals",
     work_type: "Tracking approvals/follow-ups",
@@ -92,6 +96,7 @@ export const mockSubmissions: AdminSubmission[] = [
   },
   {
     id: "sub-105",
+    employee_name: "Sarah Jenkins",
     department: "Supply Chain",
     affected_area: "Operations",
     work_type: "Manual repetitive work",
@@ -116,6 +121,7 @@ export const mockSubmissions: AdminSubmission[] = [
   },
   {
     id: "sub-106",
+    employee_name: "Dr. Rajesh Nair",
     department: "Manufacturing",
     affected_area: "Compliance",
     work_type: "Reviewing documents manually",
@@ -140,6 +146,7 @@ export const mockSubmissions: AdminSubmission[] = [
   },
   {
     id: "sub-107",
+    employee_name: "Priya Sharma",
     department: "IT",
     affected_area: "Customer Support",
     work_type: "Decision-making based on data",
