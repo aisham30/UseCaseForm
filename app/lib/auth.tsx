@@ -5,14 +5,22 @@ import { supabase, isSupabaseConfigured } from "./supabase";
 
 export type UserRole = "employee" | "reviewer" | "admin";
 
+export type UserProfile = {
+  id: string;
+  email: string;
+  full_name: string;
+  department: string;
+  role: UserRole;
+};
+
 export type AuthUser = {
   id: string;
   email: string;
-  user_metadata: {
+  user_metadata?: {
     role?: UserRole;
     full_name?: string;
   };
-  app_metadata: {
+  app_metadata?: {
     role?: UserRole;
   };
 };
@@ -25,13 +33,31 @@ export type AuthSession = {
 type AuthContextType = {
   user: AuthUser | null;
   role: UserRole | null;
+  profile: UserProfile | null;
   session: AuthSession | null;
   loading: boolean;
-  signIn: (email: string, password: string) => Promise<{ error: string | null }>;
+  signIn: (email: string, password: string) => Promise<{ error: string | null; role?: UserRole | null }>;
   signOut: () => Promise<{ error: string | null }>;
 };
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
+
+// Core Reusable Auth Utilities (matching requested signatures)
+let globalUser: AuthUser | null = null;
+let globalRole: UserRole | null = null;
+
+export const getCurrentUser = (): AuthUser | null => {
+  return globalUser;
+};
+
+export const getCurrentRole = (): UserRole | null => {
+  return globalRole;
+};
+
+export const requireRole = (allowedRoles: UserRole[]): boolean => {
+  const current = getCurrentRole();
+  return current !== null && allowedRoles.includes(current);
+};
 
 export const getCurrentUserRole = (user: AuthUser | null): UserRole => {
   if (!user) return "employee";
@@ -60,15 +86,62 @@ export const getFullName = (user: AuthUser | null): string => {
 
 export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const [user, setUser] = useState<AuthUser | null>(null);
+  const [role, setRole] = useState<UserRole | null>(null);
+  const [profile, setProfile] = useState<UserProfile | null>(null);
   const [session, setSession] = useState<AuthSession | null>(null);
   const [loading, setLoading] = useState(true);
 
   // Safely determine mode
   const isLive = isSupabaseConfigured && Boolean(supabase);
 
+  // Sync state with global variables
+  useEffect(() => {
+    globalUser = user;
+    globalRole = role;
+  }, [user, role]);
+
+  // Effect to query public.users table reactively on user change
+  useEffect(() => {
+    if (!user) {
+      setProfile(null);
+      setRole(null);
+      return;
+    }
+
+    if (isLive) {
+      const fetchProfile = async () => {
+        try {
+          const { data, error } = await supabase
+            .from("users")
+            .select("id, email, full_name, department, role")
+            .eq("id", user.id)
+            .single();
+          
+          if (!error && data) {
+            const fetchedProfile = data as UserProfile;
+            setProfile(fetchedProfile);
+            setRole(fetchedProfile.role);
+          } else {
+            console.error("Error querying public.users profile:", error);
+            setProfile(null);
+            setRole(getCurrentUserRole(user));
+          }
+        } catch (e) {
+          console.error("Exception querying public.users profile:", e);
+          setProfile(null);
+          setRole(getCurrentUserRole(user));
+        }
+      };
+      fetchProfile();
+    } else {
+      setRole(getCurrentUserRole(user));
+    }
+  }, [user, isLive]);
+
+  // Listen to session & auth changes
   useEffect(() => {
     if (isLive) {
-      // 1. Fetch initial session from Supabase
+      // 1. Fetch initial session
       supabase.auth.getSession().then(({ data: { session: sbSession } }) => {
         if (sbSession?.user) {
           const castUser = sbSession.user as unknown as AuthUser;
@@ -77,6 +150,8 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
             user: castUser,
             expires_at: sbSession.expires_at,
           });
+          // Write cookie for middleware
+          document.cookie = `supabase-auth-token=${sbSession.access_token}; path=/; max-age=${sbSession.expires_in || 3600}; SameSite=Lax; Secure`;
         }
         setLoading(false);
       });
@@ -90,9 +165,15 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
             user: castUser,
             expires_at: sbSession.expires_at,
           });
+          // Write cookie for middleware
+          document.cookie = `supabase-auth-token=${sbSession.access_token}; path=/; max-age=${sbSession.expires_in || 3600}; SameSite=Lax; Secure`;
         } else {
           setUser(null);
+          setRole(null);
+          setProfile(null);
           setSession(null);
+          // Clear cookie
+          document.cookie = "supabase-auth-token=; path=/; expires=Thu, 01 Jan 1970 00:00:00 GMT";
         }
         setLoading(false);
       });
@@ -108,6 +189,8 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
           const parsed = JSON.parse(storedSession) as AuthSession;
           setUser(parsed.user);
           setSession(parsed);
+          // Set cookie for middleware
+          document.cookie = `formai_mock_session=active; path=/; max-age=86400; SameSite=Lax; Secure`;
         }
       } catch (e) {
         console.error("Error restoring mock session:", e);
@@ -117,7 +200,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     }
   }, [isLive]);
 
-  const signIn = async (email: string, password: string): Promise<{ error: string | null }> => {
+  const signIn = async (email: string, password: string): Promise<{ error: string | null; role?: UserRole | null }> => {
     setLoading(true);
     
     if (isLive) {
@@ -126,50 +209,79 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
           email,
           password,
         });
+
         if (error) {
           setLoading(false);
-          return { error: error.message };
+          return { error: error.message, role: null };
         }
+
         if (data.user) {
           const castUser = data.user as unknown as AuthUser;
+          
+          // Fetch role from public.users table immediately to avoid redirects race condition
+          let finalRole: UserRole = "employee";
+          try {
+            const { data: dbProfile, error: pError } = await supabase
+              .from("users")
+              .select("role, full_name, department")
+              .eq("id", data.user.id)
+              .single();
+            
+            if (!pError && dbProfile?.role) {
+              finalRole = dbProfile.role as UserRole;
+            }
+          } catch (e) {
+            console.error("Exception fetching role during sign in:", e);
+          }
+
+          // Set cookie for middleware
+          if (data.session) {
+            document.cookie = `supabase-auth-token=${data.session.access_token}; path=/; max-age=${data.session.expires_in || 3600}; SameSite=Lax; Secure`;
+          }
+
           setUser(castUser);
+          setRole(finalRole);
           setSession({
             user: castUser,
             expires_at: data.session?.expires_at,
           });
+          
+          setLoading(false);
+          return { error: null, role: finalRole };
         }
-        return { error: null };
+        
+        setLoading(false);
+        return { error: "Failed to retrieve user session details.", role: null };
       } catch (err: any) {
         setLoading(false);
-        return { error: err.message || "An error occurred during authentication." };
+        return { error: err.message || "An error occurred during authentication.", role: null };
       }
     } else {
       // Mock Sign In logic
-      // Accept any password, map email to roles
       const emailLower = email.toLowerCase().trim();
-      let role: UserRole = "employee";
+      let mockRole: UserRole = "employee";
       let fullName = "Glenmark Colleague";
 
       if (emailLower.startsWith("admin")) {
-        role = "admin";
+        mockRole = "admin";
         fullName = "System Administrator";
       } else if (emailLower.startsWith("reviewer")) {
-        role = "reviewer";
+        mockRole = "reviewer";
         fullName = "Triage Lead Reviewer";
       } else if (emailLower.startsWith("employee") || emailLower.includes("aisha") || emailLower.includes("amit")) {
-        role = "employee";
+        mockRole = "employee";
         fullName = emailLower.includes("aisha") ? "Aisha Mendonsa" : "Amit Patel";
       }
 
       const mockUser: AuthUser = {
-        id: "mock-uid-" + role,
+        id: "mock-uid-" + mockRole,
         email: emailLower,
         user_metadata: {
-          role,
+          role: mockRole,
           full_name: fullName,
         },
         app_metadata: {
-          role,
+          role: mockRole,
         },
       };
 
@@ -179,10 +291,13 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       };
 
       setUser(mockUser);
+      setRole(mockRole);
       setSession(mockSession);
       localStorage.setItem("formai_mock_session", JSON.stringify(mockSession));
+      // Set cookie for middleware
+      document.cookie = `formai_mock_session=active; path=/; max-age=86400; SameSite=Lax; Secure`;
       setLoading(false);
-      return { error: null };
+      return { error: null, role: mockRole };
     }
   };
 
@@ -190,29 +305,39 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     setLoading(true);
 
     if (isLive) {
-      const { error } = await supabase.auth.signOut();
-      if (error) {
+      try {
+        const { error } = await supabase.auth.signOut();
+        // Clear cookie regardless
+        document.cookie = "supabase-auth-token=; path=/; expires=Thu, 01 Jan 1970 00:00:00 GMT";
+        if (error) {
+          setLoading(false);
+          return { error: error.message };
+        }
+        setUser(null);
+        setRole(null);
+        setProfile(null);
+        setSession(null);
         setLoading(false);
-        return { error: error.message };
+        return { error: null };
+      } catch (err: any) {
+        setLoading(false);
+        return { error: err.message || "An error occurred during sign out." };
       }
-      setUser(null);
-      setSession(null);
-      setLoading(false);
-      return { error: null };
     } else {
       // Mock Sign Out
       setUser(null);
+      setRole(null);
+      setProfile(null);
       setSession(null);
       localStorage.removeItem("formai_mock_session");
+      document.cookie = "formai_mock_session=; path=/; expires=Thu, 01 Jan 1970 00:00:00 GMT";
       setLoading(false);
       return { error: null };
     }
   };
 
-  const role = user ? getCurrentUserRole(user) : null;
-
   return (
-    <AuthContext.Provider value={{ user, role, session, loading, signIn, signOut }}>
+    <AuthContext.Provider value={{ user, role, profile, session, loading, signIn, signOut }}>
       {children}
     </AuthContext.Provider>
   );

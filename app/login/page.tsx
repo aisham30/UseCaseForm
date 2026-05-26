@@ -25,16 +25,15 @@ export default function LoginPage() {
     setErrorMessage("");
 
     try {
-      const { error } = await signIn(email, password);
+      const { error, role: resolvedRole } = await signIn(email, password);
       if (error) {
         setErrorMessage(error);
         setIsSubmitting(false);
       } else {
-        // Redirection based on role mapping
-        const emailLower = email.toLowerCase().trim();
-        if (emailLower.startsWith("admin")) {
+        // Redirection based on actual database-resolved role mapping
+        if (resolvedRole === "admin") {
           router.push("/admin");
-        } else if (emailLower.startsWith("reviewer")) {
+        } else if (resolvedRole === "reviewer") {
           router.push("/review");
         } else {
           router.push("/portal");

@@ -29,7 +29,7 @@ type FormState = {
 };
 
 const initialState: FormState = {
-  employee_name: "",
+  employee_name: [],
   department: "",
   affected_area: [],
   pain_point_desc: "",
@@ -107,8 +107,13 @@ export default function Home() {
       desired_outcome: JSON.stringify(answers), // Serialize complete 15-question answers state
     };
 
-    const { error } = await supabase.from("submissions").insert([payload]);
+    console.log("SUBMISSION PAYLOAD");
+console.log(payload);
 
+const { data, error } = await supabase
+  .from("submissions")
+  .insert(payload);
+  
     if (error) {
       console.error(error);
       setStatus("error");

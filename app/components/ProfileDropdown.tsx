@@ -6,7 +6,7 @@ import { LogOut, User, ChevronDown, ShieldAlert, Award, Star } from "lucide-reac
 import { motion, AnimatePresence } from "framer-motion";
 
 export const ProfileDropdown: React.FC = () => {
-  const { user, role, signOut } = useAuth();
+  const { user, role, profile, signOut } = useAuth();
   const [isOpen, setIsOpen] = useState(false);
   const dropdownRef = useRef<HTMLDivElement>(null);
 
@@ -22,8 +22,8 @@ export const ProfileDropdown: React.FC = () => {
 
   if (!user) return null;
 
-  const name = getFullName(user);
-  const email = user.email;
+  const name = profile?.full_name || getFullName(user);
+  const email = profile?.email || user.email;
   const initial = name.charAt(0).toUpperCase();
 
   const getRoleBadgeStyles = (r: UserRole | null) => {

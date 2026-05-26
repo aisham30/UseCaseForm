@@ -1,6 +1,6 @@
 "use client";
 
-import { CheckCircle2, Clock, Inbox, XCircle, Zap } from "lucide-react";
+import { CheckCircle2, Clock, Inbox, XCircle, Zap, FileText, HelpCircle } from "lucide-react";
 import { type Submission } from "../../lib/supabase";
 
 type StatusType = Required<Submission>["status"];
@@ -11,7 +11,14 @@ interface StatusBadgeProps {
 }
 
 export default function StatusBadge({ status, className = "" }: StatusBadgeProps) {
-  const config = {
+  const config: Record<
+    StatusType,
+    {
+      label: string;
+      icon: React.ComponentType<{ className?: string }>;
+      style: string;
+    }
+  > = {
     "New": {
       label: "New",
       icon: Inbox,
@@ -41,6 +48,26 @@ export default function StatusBadge({ status, className = "" }: StatusBadgeProps
       label: "Completed",
       icon: CheckCircle2,
       style: "bg-emerald-500/10 text-emerald-400 border-emerald-500/20 shadow-[0_0_12px_rgba(16,185,129,0.05)]",
+    },
+    "Draft": {
+      label: "Draft",
+      icon: FileText,
+      style: "bg-slate-500/10 text-slate-400 border-slate-500/20 shadow-[0_0_12px_rgba(148,163,184,0.05)]",
+    },
+    "Submitted": {
+      label: "Submitted",
+      icon: Inbox,
+      style: "bg-blue-500/10 text-blue-400 border-blue-500/20 shadow-[0_0_12px_rgba(59,130,246,0.05)]",
+    },
+    "Need More Information": {
+      label: "Need Info",
+      icon: HelpCircle,
+      style: "bg-amber-500/10 text-amber-400 border-amber-500/20 shadow-[0_0_12px_rgba(245,158,11,0.05)]",
+    },
+    "In Progress": {
+      label: "In Progress",
+      icon: Zap,
+      style: "bg-cyan-500/10 text-cyan-400 border-cyan-500/20 shadow-[0_0_12px_rgba(6,182,212,0.05)]",
     },
   };
 

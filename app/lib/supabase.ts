@@ -21,8 +21,10 @@ export type Submission = {
   systems_involved: string[];
   desired_outcome: string;
   created_at?: string;
+  updated_at?: string;
+  user_id?: string;
   // Extended Admin Fields
-  status?: "New" | "Under Review" | "Approved" | "Completed" | "Rejected" | "Implemented";
+  status?: "New" | "Under Review" | "Approved" | "Completed" | "Rejected" | "Implemented" | "Draft" | "Submitted" | "Need More Information" | "In Progress";
   tags?: string[];
   admin_notes?: AdminNote[];
   assigned_owner?: string;
