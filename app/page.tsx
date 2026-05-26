@@ -29,7 +29,7 @@ type FormState = {
 };
 
 const initialState: FormState = {
-  employee_name: [],
+  employee_name: "",
   department: "",
   affected_area: [],
   pain_point_desc: "",

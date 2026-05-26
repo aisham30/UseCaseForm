@@ -3,7 +3,7 @@
 import { useMemo, useState, useEffect } from "react";
 import Link from "next/link";
 import { AnimatePresence, motion } from "framer-motion";
-import { ArrowLeft, ArrowRight, CheckCircle2, Loader2, ShieldCheck, HeartPulse, Sparkles } from "lucide-react";
+import { ArrowLeft, ArrowRight, CheckCircle2, Loader2, ShieldCheck, HeartPulse, Sparkles, AlertTriangle } from "lucide-react";
 import { sections, Question, Section } from "../../data/questions";
 import { supabase, type Submission } from "../../lib/supabase";
 import { CustomDropdown } from "../../components/CustomDropdown";
@@ -57,6 +57,7 @@ export default function NewRequestPage() {
   const [isReviewing, setIsReviewing] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [status, setStatus] = useState<"idle" | "success" | "error">("idle");
+  const [submitErrorMsg, setSubmitErrorMsg] = useState("");
 
   // Dynamically synchronize the employee's name from their authenticated session profile
   useEffect(() => {
@@ -106,10 +107,18 @@ export default function NewRequestPage() {
   const handleSubmit = async () => {
     setIsSubmitting(true);
     setStatus("idle");
+    setSubmitErrorMsg("");
+
+    // UUID Validation Helper
+    const isValidUUID = (uuid: string | undefined): boolean => {
+      if (!uuid) return false;
+      const regex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+      return regex.test(uuid);
+    };
 
     // Format fields cleanly to save in database columns
     const payload: Submission = {
-      user_id: user?.id, // Securely associate request with logged-in user id
+      user_id: isValidUUID(user?.id) ? user?.id : undefined, // Securely associate request with logged-in user id
       employee_name: answers.employee_name,
       department: answers.department,
       affected_area: answers.affected_area.join(", "),
@@ -123,30 +132,27 @@ export default function NewRequestPage() {
       status: "Submitted", // Set default status to Submitted
     };
 
-    const { error } = await supabase.from("submissions").insert([payload]);
+    console.log("Submitting Opportunity Payload:", payload);
+
+    const { data: insertResult, error } = await supabase.from("submissions").insert([payload]).select();
 
     if (error) {
-  console.error("================================");
-  console.error("SUPABASE SUBMISSION ERROR");
-  console.error("================================");
-  console.error(error);
-  console.error(JSON.stringify(error, null, 2));
+      console.error("================================");
+      console.error("SUPABASE SUBMISSION ERROR");
+      console.error("================================");
+      console.error("Message:", error.message);
+      console.error("Details:", error.details);
+      console.error("Hint:", error.hint);
+      console.error("Full Error Object:", error);
 
-  alert(
-    `
-Message: ${error?.message || "Unknown"}
-
-Details: ${error?.details || "None"}
-
-Hint: ${error?.hint || "None"}
-    `
-  );
-
-  setStatus("error");
-} else {
-  console.log("Submission saved!");
-  setStatus("success");
-}
+      setSubmitErrorMsg(error.message || "Unknown Supabase database error");
+      setStatus("error");
+    } else {
+      console.log("Submission saved! Insert Result:", insertResult);
+      setStatus("success");
+    }
+    setIsSubmitting(false);
+  };
 
   return (
     <AuthGuard allowedRoles={["employee", "reviewer", "admin"]}>
@@ -218,6 +224,7 @@ Hint: ${error?.hint || "None"}
                       onSubmit={handleSubmit}
                       isSubmitting={isSubmitting}
                       status={status}
+                      submitErrorMsg={submitErrorMsg}
                       onEditSection={(sectionIndex) => {
                         setCurrentSectionIndex(sectionIndex);
                         setIsReviewing(false);
@@ -390,12 +397,14 @@ function ReviewScreen({
   onSubmit,
   isSubmitting,
   status,
+  submitErrorMsg,
   onEditSection,
 }: {
   answers: FormState;
   onSubmit: () => void;
   isSubmitting: boolean;
   status: "idle" | "success" | "error";
+  submitErrorMsg: string;
   onEditSection: (index: number) => void;
 }) {
   return (
@@ -453,8 +462,14 @@ function ReviewScreen({
       </div>
 
       {status === "error" && (
-        <div className="mt-6 rounded-xl border border-rose-200 bg-rose-50 px-4 py-3 text-xs font-semibold text-rose-800 shadow-sm">
-          Database submission failed. Please verify your Supabase configuration.
+        <div className="mt-6 rounded-xl border border-rose-200 bg-rose-50 p-4 text-xs font-semibold text-rose-800 shadow-sm space-y-1 text-left">
+          <p className="font-bold flex items-center gap-1">
+            <AlertTriangle className="size-3.5 shrink-0 text-rose-600 animate-pulse" />
+            Database Submission Failed
+          </p>
+          <p className="font-mono text-[10px] leading-relaxed bg-white/70 border border-rose-100 p-2.5 rounded-lg text-rose-900 break-words mt-1.5 shadow-sm">
+            {submitErrorMsg || "Verify your Supabase configuration."}
+          </p>
         </div>
       )}
 

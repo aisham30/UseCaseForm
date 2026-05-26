@@ -102,11 +102,25 @@ export default function EmployeePortalPage() {
     }
 
     try {
-      const { data, error } = await supabase
-        .from("submissions")
-        .select("*")
-        .eq("user_id", user.id)
-        .order("created_at", { ascending: false });
+      // UUID Validation Helper
+      const isValidUUID = (uuid: string | undefined): boolean => {
+        if (!uuid) return false;
+        const regex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+        return regex.test(uuid);
+      };
+
+      // Robust UUID safety guard: If user.id is not a valid UUID (e.g. mock-uid-employee),
+      // we query by employee_name as a fallback, or we query where user_id is null.
+      let query = supabase.from("submissions").select("*");
+      
+      if (isValidUUID(user.id)) {
+        query = query.eq("user_id", user.id);
+      } else {
+        // Fallback for mock users when Supabase is configured
+        query = query.or(`employee_name.eq."${employeeName}",user_id.is.null`);
+      }
+
+      const { data, error } = await query.order("created_at", { ascending: false });
 
       if (error) {
         console.error("Supabase query error:", error);
