@@ -38,6 +38,8 @@ import {
 import { motion, AnimatePresence } from "framer-motion";
 import { mockSubmissions } from "../data/mockSubmissions";
 import { sections, questions, Question } from "../data/questions";
+import { AuthGuard } from "../components/AuthGuard";
+import { ProfileDropdown } from "../components/ProfileDropdown";
 
 const AVAILABLE_TAGS = ["AI", "Automation", "Dashboard", "Process Issue", "Compliance", "Needs Discussion"];
 const AVAILABLE_OWNERS = ["Unassigned", "AI Solutions Team", "Automation Team", "Analytics Support", "IT Operations", "Business Systems"];
@@ -192,12 +194,14 @@ export default function AdminPage() {
 
   // Safe employee name retriever
   const getEmployeeName = (submission: AdminSubmission) => {
-    if (submission.employee_name) return submission.employee_name;
-    if ((submission as any).name) return (submission as any).name;
+    if (submission.employee_name && submission.employee_name.trim() !== "") {
+      return submission.employee_name;
+    }
     try {
       const parsed = JSON.parse(submission.desired_outcome || "");
-      if (parsed.employee_name) return parsed.employee_name;
-      if (parsed.name) return parsed.name;
+      if (parsed.employee_name && parsed.employee_name.trim() !== "") {
+        return parsed.employee_name;
+      }
     } catch (e) {}
     return "Not Provided";
   };
@@ -354,9 +358,9 @@ export default function AdminPage() {
         try { supB = JSON.parse(b.desired_outcome || "").expected_support || supB; } catch(e){}
         valA = supA;
         valB = supB;
-      } else if (sortField === "affected_area") {
-        valA = Array.isArray(a.affected_area) ? a.affected_area.join(", ") : (a.affected_area || "");
-        valB = Array.isArray(b.affected_area) ? b.affected_area.join(", ") : (b.affected_area || "");
+      } else if (sortField === "friction") {
+        valA = a.friction || "";
+        valB = b.friction || "";
       }
 
       if (typeof valA === "string") {
@@ -501,7 +505,8 @@ export default function AdminPage() {
   );
 
   return (
-    <main className="min-h-screen bg-slate-50 text-slate-800 p-4 sm:p-6 lg:p-8 font-sans relative overflow-x-hidden">
+    <AuthGuard allowedRoles={["admin"]}>
+      <main className="min-h-screen bg-slate-50 text-slate-800 p-4 sm:p-6 lg:p-8 font-sans relative overflow-x-hidden">
       {/* Background Soft Accents */}
       <div className="pointer-events-none fixed inset-0 bg-[radial-gradient(circle_at_50%_0%,#EAF3FF_0%,transparent_50%)] opacity-70" />
 
@@ -552,6 +557,7 @@ export default function AdminPage() {
             >
               Intake Form
             </Link>
+            <ProfileDropdown />
           </div>
         </header>
 
@@ -739,7 +745,7 @@ export default function AdminPage() {
                   <table className="w-full text-left border-collapse min-w-[1000px] table-fixed">
                     <thead className="sticky top-0 bg-slate-50 z-20 shadow-[0_1px_0_0_rgba(226,232,240,1)]">
                       <tr className="text-[10px] uppercase tracking-wider text-slate-400 font-extrabold">
-                        <th className="px-6 py-4 cursor-pointer hover:bg-slate-100 w-[160px]" onClick={() => handleSort("employee_name")}>
+                        <th className="px-6 py-4 cursor-pointer hover:bg-slate-100 w-[180px]" onClick={() => handleSort("employee_name")}>
                           <span className="flex items-center gap-1.5">
                             Employee Name
                             <ArrowUpDown className="h-3 w-3 text-slate-400" />
@@ -751,9 +757,9 @@ export default function AdminPage() {
                             <ArrowUpDown className="h-3 w-3 text-slate-400" />
                           </span>
                         </th>
-                        <th className="px-4 py-4 cursor-pointer hover:bg-slate-100 w-[200px]" onClick={() => handleSort("affected_area")}>
+                        <th className="px-4 py-4 cursor-pointer hover:bg-slate-100 w-[280px]" onClick={() => handleSort("friction")}>
                           <span className="flex items-center gap-1.5">
-                            Affected Area
+                            Issue/Pain Point
                             <ArrowUpDown className="h-3 w-3 text-slate-400" />
                           </span>
                         </th>
@@ -763,27 +769,15 @@ export default function AdminPage() {
                             <ArrowUpDown className="h-3 w-3 text-slate-400" />
                           </span>
                         </th>
-                        <th className="px-4 py-4 cursor-pointer hover:bg-slate-100 w-[140px]" onClick={() => handleSort("frequency")}>
+                        <th className="px-6 py-4 cursor-pointer hover:bg-slate-100 w-[150px]" onClick={() => handleSort("status")}>
                           <span className="flex items-center gap-1.5">
-                            Frequency
-                            <ArrowUpDown className="h-3 w-3 text-slate-400" />
-                          </span>
-                        </th>
-                        <th className="px-4 py-4 cursor-pointer hover:bg-slate-100 w-[100px]" onClick={() => handleSort("urgency")}>
-                          <span className="flex items-center gap-1.5">
-                            Urgency
+                            Status
                             <ArrowUpDown className="h-3 w-3 text-slate-400" />
                           </span>
                         </th>
                         <th className="px-4 py-4 cursor-pointer hover:bg-slate-100 w-[130px]" onClick={() => handleSort("created_at")}>
                           <span className="flex items-center gap-1.5">
                             Created Date
-                            <ArrowUpDown className="h-3 w-3 text-slate-400" />
-                          </span>
-                        </th>
-                        <th className="px-6 py-4 cursor-pointer hover:bg-slate-100 w-[150px]" onClick={() => handleSort("status")}>
-                          <span className="flex items-center gap-1.5">
-                            Status
                             <ArrowUpDown className="h-3 w-3 text-slate-400" />
                           </span>
                         </th>
@@ -795,27 +789,11 @@ export default function AdminPage() {
                         const activeStatus = sub.status || "New";
 
                         // Parse properties dynamically
-                        let recordUrgency = "Medium";
                         let recordSupport = sub.expected_support || "Not Specified";
                         try {
                           const parsed = JSON.parse(sub.desired_outcome || "");
-                          recordUrgency = parsed.urgency || "Medium";
                           recordSupport = parsed.expected_support || recordSupport;
                         } catch (e) {}
-
-                        // Triage urgency colors
-                        const urgencyStyle = 
-                          recordUrgency === "Critical" ? "bg-rose-50 text-rose-700 border-rose-200" :
-                          recordUrgency === "High" ? "bg-amber-50 text-amber-700 border-amber-200" :
-                          recordUrgency === "Medium" ? "bg-blue-50 text-blue-700 border-blue-200" :
-                          "bg-slate-50 text-slate-700 border-slate-200";
-
-                        let affectedAreaText = "";
-                        if (Array.isArray(sub.affected_area)) {
-                          affectedAreaText = sub.affected_area.join(", ");
-                        } else {
-                          affectedAreaText = sub.affected_area || "";
-                        }
 
                         return (
                           <tr 
@@ -833,31 +811,14 @@ export default function AdminPage() {
                               {sub.department}
                             </td>
 
-                            {/* Affected Area */}
-                            <td className="px-4 py-4 text-slate-600 truncate" title={affectedAreaText}>
-                              {affectedAreaText || "Not Specified"}
+                            {/* Issue/Pain Point */}
+                            <td className="px-4 py-4 text-slate-600 truncate" title={sub.friction}>
+                              {sub.friction}
                             </td>
 
                             {/* Support Requested */}
                             <td className="px-4 py-4 text-slate-600 truncate" title={recordSupport}>
                               {recordSupport}
-                            </td>
-
-                            {/* Frequency */}
-                            <td className="px-4 py-4 text-slate-500 truncate" title={sub.frequency}>
-                              {sub.frequency}
-                            </td>
-
-                            {/* Urgency */}
-                            <td className="px-4 py-4">
-                              <span className={`inline-flex rounded-full border px-2 py-0.5 text-[9px] font-bold ${urgencyStyle}`}>
-                                {recordUrgency}
-                              </span>
-                            </td>
-
-                            {/* Created Date */}
-                            <td className="px-4 py-4 text-slate-500 font-mono text-[10px] truncate">
-                              {formatDate(sub.created_at)}
                             </td>
 
                             {/* Status select box inline */}
@@ -875,6 +836,11 @@ export default function AdminPage() {
                                   <option value="Rejected">Rejected</option>
                                 </select>
                               </div>
+                            </td>
+
+                            {/* Created Date */}
+                            <td className="px-4 py-4 text-slate-500 font-mono text-[10px] truncate">
+                              {formatDate(sub.created_at)}
                             </td>
                           </tr>
                         );
@@ -1231,7 +1197,8 @@ export default function AdminPage() {
           )}
         </AnimatePresence>
       </div>
-    </main>
+      </main>
+    </AuthGuard>
   );
 }
 

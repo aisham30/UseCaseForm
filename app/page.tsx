@@ -10,6 +10,7 @@ import { CustomDropdown } from "./components/CustomDropdown";
 import { CustomMultiSelect } from "./components/CustomMultiSelect";
 
 type FormState = {
+  employee_name: string;
   department: string;
   affected_area: string[];
   pain_point_desc: string;
@@ -28,6 +29,7 @@ type FormState = {
 };
 
 const initialState: FormState = {
+  employee_name: "",
   department: "",
   affected_area: [],
   pain_point_desc: "",
@@ -93,6 +95,7 @@ export default function Home() {
 
     // Format fields cleanly to save in existing database columns
     const payload: Submission = {
+      employee_name: answers.employee_name,
       department: answers.department,
       affected_area: answers.affected_area.join(", "),
       work_type: answers.friction.join(", "),

@@ -51,6 +51,9 @@ export type Question = {
   type: QuestionType;
   options?: QuestionOption[];
   placeholder?: string;
+  label?: string;
+  helpText?: string;
+  required?: boolean;
 };
 
 export type Section = {
@@ -66,6 +69,17 @@ export const sections: Section[] = [
     title: "Request Ownership",
     explanation: "Help us understand who is requesting this opportunity and which teams are most impacted.",
     questions: [
+      {
+         id: "employee_name",
+         eyebrow: "Employee Name",
+         title: "Employee Name",
+         helper: "Enter your full name as per company records.",
+         type: "short_text",
+         placeholder: "Enter your full name...",
+         label: "Employee Name",
+         helpText: "Enter your full name as per company records.",
+         required: true
+       }, 
       {
         id: "department",
         eyebrow: "Department Ownership",
