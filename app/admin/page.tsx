@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useState, useRef } from "react";
 import Link from "next/link";
-import { supabase, Submission, isSupabaseConfigured, AdminSubmission, AdminNote } from "../lib/supabase";
+import { supabase, Submission, isSupabaseConfigured, AdminSubmission, AdminNote, normalizeAdminNotes, formatRequestNumber } from "../lib/supabase";
 import { 
   Inbox, 
   Filter, 
@@ -50,13 +50,6 @@ export default function AdminPage() {
   const { user, profile } = useAuth();
   const [submissions, setSubmissions] = useState<AdminSubmission[]>([]);
 
-  // Formatted Request Number helper (Rule 6)
-  const formatRequestNumber = (id: number | string | undefined): string => {
-    if (!id) return "REQ-00000";
-    const numId = Number(id);
-    if (isNaN(numId)) return `REQ-${String(id).substring(0, 5).toUpperCase()}`;
-    return `REQ-${String(numId).padStart(5, '0')}`;
-  };
 
   // Delete Request Workflow (Rule 8)
   const handleDeleteRequest = async (id: number | string) => {
@@ -65,16 +58,28 @@ export default function AdminPage() {
 
     try {
       const numId = typeof id === "number" ? id : parseInt(String(id), 10);
-      console.log("[DIAGNOSTIC] Admin executing Supabase DELETE for Opportunity:", numId);
+      const authUser = user?.id || 'Unknown/Missing';
       
-      const { error } = await supabase
+      console.log("=== DELETE DIAGNOSTIC ===");
+      console.log("Submission ID:", numId);
+      console.log("Authenticated User ID:", authUser);
+      console.log("Query Executed: supabase.from('submissions').delete().eq('id', numId).select()");
+      
+      const { data, error } = await supabase
         .from("submissions")
         .delete()
-        .eq("id", numId);
+        .eq("id", numId)
+        .select();
+
+      console.log("Response Data:", data);
+      console.log("Response Error:", error);
 
       if (error) {
         console.error("Delete failed:", error);
         showToast(`Failed to delete request: ${error.message}`, "error");
+      } else if (!data || data.length === 0) {
+        console.warn("Delete returned 0 rows. RLS Policy Blocked this action.");
+        showToast("Opportunity request could not be deleted (RLS Blocked).", "error");
       } else {
         console.log("Delete succeeded for Opportunity:", numId);
         
@@ -497,7 +502,8 @@ export default function AdminPage() {
           workType.includes(searchLower) ||
           friction.includes(searchLower) ||
           desiredOutcome.includes(searchLower) ||
-          systemsInvolved.includes(searchLower);
+          systemsInvolved.includes(searchLower) ||
+          formatRequestNumber(submission.id).toLowerCase().includes(searchLower);
       }
 
       // 2. Department Filter
@@ -1432,7 +1438,7 @@ export default function AdminPage() {
                   {/* Collaborative Administrative Notes Feed */}
                   <div className="border-t border-slate-100 pt-5">
                     <NotesSection
-                      notes={selectedSubmission.admin_notes || []}
+                      notes={normalizeAdminNotes(selectedSubmission.admin_notes)}
                       onAddNote={(content) => {
                         const newNoteObj: AdminNote = {
                           id: "note-" + Date.now(),
@@ -1440,11 +1446,11 @@ export default function AdminPage() {
                           content,
                           created_at: new Date().toISOString()
                         };
-                        const nextNotes = [...(selectedSubmission.admin_notes || []), newNoteObj];
+                        const nextNotes = [...normalizeAdminNotes(selectedSubmission.admin_notes), newNoteObj];
                         updateSubmissionField(selectedSubmission.id, "admin_notes", nextNotes);
                       }}
                       onDeleteNote={(noteId) => {
-                        const nextNotes = (selectedSubmission.admin_notes || []).filter(n => n.id !== noteId);
+                        const nextNotes = normalizeAdminNotes(selectedSubmission.admin_notes).filter(n => n.id !== noteId);
                         updateSubmissionField(selectedSubmission.id, "admin_notes", nextNotes);
                       }}
                     />
@@ -1509,16 +1515,23 @@ function NotesSection({
   onAddNote,
   onDeleteNote
 }: {
-  notes: AdminNote[];
+  notes: any;
   onAddNote: (content: string) => void;
   onDeleteNote: (noteId: string) => void;
 }) {
+  console.log("=== DIAGNOSTIC: NotesSection ===");
+  console.log("value of notes:", notes);
+  console.log("typeof notes:", typeof notes);
+  console.log("Array.isArray(notes):", Array.isArray(notes));
+
+  const normalizedNotes = normalizeAdminNotes(notes);
+
   const [text, setText] = useState("");
   const feedRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     feedRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [notes.length]);
+  }, [normalizedNotes.length]);
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
@@ -1533,18 +1546,18 @@ function NotesSection({
       <div className="flex items-center gap-2 border-b border-slate-200/60 px-4 py-3 bg-slate-100/30">
         <Activity className="size-4 text-blue-600" />
         <span className="text-xs font-bold uppercase tracking-wider text-slate-500">
-          Admin Notes ({notes.length})
+          Admin Notes ({normalizedNotes.length})
         </span>
       </div>
 
       {/* Feed */}
       <div className="p-4 space-y-3 max-h-[220px] overflow-y-auto overscroll-contain">
-        {notes.length === 0 ? (
+        {normalizedNotes.length === 0 ? (
           <div className="text-center py-6 text-slate-400 text-xs font-medium">
             No administrative notes captured yet.
           </div>
         ) : (
-          notes.map((note) => (
+          normalizedNotes.map((note) => (
             <div
               key={note.id}
               className="group relative rounded-xl border border-slate-200 bg-white p-3 hover:shadow-sm transition"

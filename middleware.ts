@@ -7,6 +7,7 @@ export function middleware(request: NextRequest) {
 
   // 1. Determine if the path is protected
   const publicRoutes = [
+  "/",
   "/login",
   "/forgot-password"
 ];

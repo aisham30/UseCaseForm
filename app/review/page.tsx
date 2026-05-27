@@ -3,7 +3,7 @@
 import React, { useEffect, useState, useMemo, useRef } from "react";
 import { AuthGuard } from "../components/AuthGuard";
 import { ProfileDropdown } from "../components/ProfileDropdown";
-import { supabase, isSupabaseConfigured, type Submission, type AdminNote } from "../lib/supabase";
+import { supabase, isSupabaseConfigured, type Submission, type AdminNote, normalizeAdminNotes, formatRequestNumber } from "../lib/supabase";
 import StatusBadge from "../admin/components/StatusBadge";
 import { 
   HeartPulse, 
@@ -40,13 +40,6 @@ const AVAILABLE_OWNERS = ["Unassigned", "AI Solutions Team", "Automation Team", 
 export default function ReviewerPortalPage() {
   const { user, profile } = useAuth();
 
-  // Formatted Request Number helper (Rule 6)
-  const formatRequestNumber = (id: number | string | undefined): string => {
-    if (!id) return "REQ-00000";
-    const numId = Number(id);
-    if (isNaN(numId)) return `REQ-${String(id).substring(0, 5).toUpperCase()}`;
-    return `REQ-${String(numId).padStart(5, '0')}`;
-  };
   const [submissions, setSubmissions] = useState<Submission[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [isRefreshing, setIsRefreshing] = useState(false);
@@ -338,7 +331,8 @@ export default function ReviewerPortalPage() {
                empName.includes(search) || 
                dept.includes(search) || 
                friction.includes(search) || 
-               area.includes(search);
+               area.includes(search) ||
+               formatRequestNumber(sub.id).toLowerCase().includes(search);
       });
     }
 
@@ -704,44 +698,12 @@ export default function ReviewerPortalPage() {
                       </select>
                     </div>
 
-                    {/* Opportunity Tagging */}
-                    <div className="space-y-1.5">
-                      <label className="text-[9px] font-extrabold uppercase tracking-wider text-slate-400 block">
-                        Triage Tag Labels
-                      </label>
-                      <div className="flex flex-wrap gap-1.5">
-                        {AVAILABLE_TAGS.map((tagItem) => {
-                          const currentTags = selectedSubmission.tags || [];
-                          const isTagged = currentTags.includes(tagItem);
-                          return (
-                            <button
-                              key={tagItem}
-                              disabled={isUpdatingStatus}
-                              onClick={() => {
-                                const nextTags = isTagged 
-                                  ? currentTags.filter(t => t !== tagItem)
-                                  : [...currentTags, tagItem];
-                                updateSubmissionField(selectedSubmission.id!, "tags", nextTags);
-                              }}
-                              className={`px-2.5 py-1 text-[10px] font-bold rounded-lg border transition cursor-pointer flex items-center gap-1 ${
-                                isTagged 
-                                  ? "bg-amber-50/80 border-amber-300 text-amber-800 font-extrabold"
-                                  : "bg-white border-slate-200 text-slate-500 hover:border-slate-300"
-                              }`}
-                            >
-                              <Tag className="size-2.5" />
-                              {tagItem}
-                            </button>
-                          );
-                        })}
-                      </div>
-                    </div>
                   </div>
 
                   {/* Collaborative review comments (Phase 4) */}
                   <div className="border-t border-slate-100 pt-5">
                     <NotesSection
-                      notes={selectedSubmission.admin_notes || []}
+                      notes={normalizeAdminNotes(selectedSubmission.admin_notes)}
                       onAddNote={(content) => {
                         const newNoteObj: AdminNote = {
                           id: "note-" + Date.now(),
@@ -749,11 +711,11 @@ export default function ReviewerPortalPage() {
                           content,
                           created_at: new Date().toISOString()
                         };
-                        const nextNotes = [...(selectedSubmission.admin_notes || []), newNoteObj];
+                        const nextNotes = [...normalizeAdminNotes(selectedSubmission.admin_notes), newNoteObj];
                         updateSubmissionField(selectedSubmission.id!, "admin_notes", nextNotes);
                       }}
                       onDeleteNote={(noteId) => {
-                        const nextNotes = (selectedSubmission.admin_notes || []).filter(n => n.id !== noteId);
+                        const nextNotes = normalizeAdminNotes(selectedSubmission.admin_notes).filter(n => n.id !== noteId);
                         updateSubmissionField(selectedSubmission.id!, "admin_notes", nextNotes);
                       }}
                     />
@@ -931,14 +893,15 @@ export default function ReviewerPortalPage() {
 
 // Inlined NotesSection for self-contained comments triaging support in Reviewer Dashboard
 function NotesSection({
-  notes = [],
+  notes: rawNotes = [],
   onAddNote,
   onDeleteNote
 }: {
-  notes: AdminNote[];
+  notes: any;
   onAddNote: (content: string) => void;
   onDeleteNote: (noteId: string) => void;
 }) {
+  const notes = normalizeAdminNotes(rawNotes);
   const [text, setText] = useState("");
   const feedRef = useRef<HTMLDivElement>(null);
 

@@ -1,14 +1,27 @@
 "use client";
 
-import React, { useState } from "react";
+import React, { useState, Suspense } from "react";
 import { useAuth } from "../lib/auth";
-import { useRouter } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import { HeartPulse, Loader2, Sparkles, ShieldCheck, Mail, Lock, KeyRound, Building2 } from "lucide-react";
 import { motion } from "framer-motion";
 
 export default function LoginPage() {
+  return (
+    <Suspense fallback={
+      <div className="flex min-h-screen items-center justify-center bg-slate-50">
+        <Loader2 className="h-6 w-6 animate-spin text-blue-800" />
+      </div>
+    }>
+      <LoginContent />
+    </Suspense>
+  );
+}
+
+function LoginContent() {
   const { signIn } = useAuth();
   const router = useRouter();
+  const searchParams = useSearchParams();
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -30,13 +43,18 @@ export default function LoginPage() {
         setErrorMessage(error);
         setIsSubmitting(false);
       } else {
-        // Redirection based on actual database-resolved role mapping
-        if (resolvedRole === "admin") {
-          router.push("/admin");
-        } else if (resolvedRole === "reviewer") {
-          router.push("/review");
+        const nextUrl = searchParams.get("next");
+        if (nextUrl) {
+          router.push(nextUrl);
         } else {
-          router.push("/portal");
+          // Redirection based on actual database-resolved role mapping
+          if (resolvedRole === "admin") {
+            router.push("/admin");
+          } else if (resolvedRole === "reviewer") {
+            router.push("/review");
+          } else {
+            router.push("/portal");
+          }
         }
       }
     } catch (err: any) {

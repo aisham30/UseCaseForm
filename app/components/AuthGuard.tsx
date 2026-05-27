@@ -2,7 +2,7 @@
 
 import React, { useEffect } from "react";
 import { useAuth, UserRole } from "../lib/auth";
-import { useRouter } from "next/navigation";
+import { useRouter, usePathname } from "next/navigation";
 import { ShieldAlert, LogOut, ArrowLeft, HeartPulse } from "lucide-react";
 import { motion } from "framer-motion";
 import Link from "next/link";
@@ -15,12 +15,14 @@ interface AuthGuardProps {
 export const AuthGuard: React.FC<AuthGuardProps> = ({ children, allowedRoles }) => {
   const { user, role, loading, signOut } = useAuth();
   const router = useRouter();
+  const pathname = usePathname();
 
   useEffect(() => {
     if (!loading && !user) {
-      router.push("/login");
+      const nextUrl = pathname ? encodeURIComponent(pathname) : "";
+      router.push(`/login${nextUrl ? `?next=${nextUrl}` : ""}`);
     }
-  }, [user, loading, router]);
+  }, [user, loading, router, pathname]);
 
   // Loading Screen
   if (loading) {

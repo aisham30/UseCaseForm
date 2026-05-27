@@ -53,3 +53,47 @@ export const supabase = createClient(
   supabaseUrl || "https://ypxprdircaowsplnuutr.supabase.co", 
   supabaseAnonKey || "placeholder"
 );
+
+/**
+ * Normalizes the admin_notes field to ensure it is always a valid AdminNote array.
+ * This protects the UI from crashing if legacy data was stored as a JSON string,
+ * or corrupted via improper spread operations.
+ */
+export function normalizeAdminNotes(notes: any): AdminNote[] {
+  let normalizedNotes: AdminNote[] = [];
+  try {
+    if (Array.isArray(notes)) {
+      normalizedNotes = notes;
+    } else if (typeof notes === "string") {
+      const parsed = JSON.parse(notes);
+      normalizedNotes = Array.isArray(parsed) ? parsed : [];
+    } else if (notes && typeof notes === "object") {
+      normalizedNotes = Object.values(notes);
+    }
+  } catch (e) {
+    console.warn("Failed to parse admin_notes array:", e);
+    normalizedNotes = [];
+  }
+
+  // Final sanitization to strip out any garbage string characters
+  // (e.g., if a string was spread into an array during a previous faulty update)
+  return normalizedNotes.filter((n: any) => n && typeof n === "object" && n.id && n.content);
+}
+
+/**
+ * Formats a raw database ID into a consistent enterprise request number (e.g., REQ-00018)
+ */
+export const formatRequestNumber = (id: number | string | undefined): string => {
+  if (!id) return "REQ-00000";
+  
+  const strId = String(id);
+  // Extract all numeric digits (handles both "18" and "sub-101")
+  const numericPart = strId.replace(/\D/g, "");
+  
+  if (numericPart) {
+    return `REQ-${numericPart.padStart(5, '0')}`;
+  }
+  
+  // Fallback for UUIDs or purely alphabetical strings
+  return `REQ-${strId.substring(0, 5).toUpperCase()}`;
+};

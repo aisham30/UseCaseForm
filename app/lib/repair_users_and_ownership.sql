@@ -140,9 +140,8 @@ DROP POLICY IF EXISTS "Allow public updates" ON public.submissions;
 CREATE POLICY "Submissions select policy"
 ON public.submissions
 FOR SELECT
-TO authenticated, anon
+TO authenticated
 USING (
-  (auth.role() = 'anon') OR
   (auth.uid() = user_id) OR
   (EXISTS (
     SELECT 1 FROM public.users
@@ -155,20 +154,17 @@ USING (
 CREATE POLICY "Submissions insert policy"
 ON public.submissions
 FOR INSERT
-TO authenticated, anon
+TO authenticated
 WITH CHECK (
-  (auth.role() = 'anon') OR
-  (auth.uid() = user_id) OR
-  (user_id IS NULL)
+  (auth.uid() = user_id)
 );
 
 -- 3. UPDATE Policy: Employees strictly update own; Reviewers/Admins edit all
 CREATE POLICY "Submissions update policy"
 ON public.submissions
 FOR UPDATE
-TO authenticated, anon
+TO authenticated
 USING (
-  (auth.role() = 'anon') OR
   (auth.uid() = user_id) OR
   (EXISTS (
     SELECT 1 FROM public.users
@@ -177,11 +173,24 @@ USING (
   ))
 )
 WITH CHECK (
-  (auth.role() = 'anon') OR
   (auth.uid() = user_id) OR
   (EXISTS (
     SELECT 1 FROM public.users
     WHERE public.users.id = auth.uid()
     AND public.users.role IN ('reviewer', 'admin')
+  ))
+);
+
+-- 4. DELETE Policy: Employees strictly delete own; Admins delete all
+CREATE POLICY "Submissions delete policy"
+ON public.submissions
+FOR DELETE
+TO authenticated
+USING (
+  (auth.uid() = user_id) OR
+  (EXISTS (
+    SELECT 1 FROM public.users
+    WHERE public.users.id = auth.uid()
+    AND public.users.role = 'admin'
   ))
 );

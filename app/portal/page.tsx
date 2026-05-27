@@ -4,7 +4,7 @@ import React, { useEffect, useMemo, useState } from "react";
 import { AuthGuard } from "../components/AuthGuard";
 import { ProfileDropdown } from "../components/ProfileDropdown";
 import { useAuth, getFullName } from "../lib/auth";
-import { supabase, isSupabaseConfigured, type Submission } from "../lib/supabase";
+import { supabase, isSupabaseConfigured, type Submission, normalizeAdminNotes, formatRequestNumber } from "../lib/supabase";
 import { 
   HeartPulse, 
   PlusCircle, 
@@ -157,14 +157,6 @@ export default function EmployeePortalPage() {
     setSelectedRequest(req);
   };
 
-  // Formatted Request Number helper (Rule 6)
-  const formatRequestNumber = (id: number | string | undefined): string => {
-    if (!id) return "REQ-00000";
-    const numId = Number(id);
-    if (isNaN(numId)) return `REQ-${String(id).substring(0, 5).toUpperCase()}`;
-    return `REQ-${String(numId).padStart(5, '0')}`;
-  };
-
   // Delete Request Workflow (Rule 8)
   const handleDeleteRequest = async (id: number | string) => {
     const confirmed = window.confirm("Are you sure you want to delete this opportunity request? This action is permanent and cannot be undone.");
@@ -238,7 +230,8 @@ export default function EmployeePortalPage() {
           matchesSearch = 
             painPointText.includes(searchLower) || 
             deptText.includes(searchLower) ||
-            parsedOutcome.includes(searchLower);
+            parsedOutcome.includes(searchLower) ||
+            formatRequestNumber(req.id).toLowerCase().includes(searchLower);
         }
 
         // 2. Status Match
@@ -706,8 +699,8 @@ export default function EmployeePortalPage() {
                       <div className="border-t border-slate-100 pt-5 space-y-2">
                         <h4 className="text-[10px] font-extrabold uppercase tracking-wide text-slate-400">Reviewer Triage Feed</h4>
                         <div className="bg-slate-50/50 border border-slate-100 rounded-2xl p-4.5 text-xs text-slate-500 font-medium leading-relaxed">
-                          {selectedRequest.admin_notes && (selectedRequest.admin_notes as any).length > 0 ? (
-                            (selectedRequest.admin_notes as any).map((note: any) => (
+                          {normalizeAdminNotes(selectedRequest.admin_notes).length > 0 ? (
+                            normalizeAdminNotes(selectedRequest.admin_notes).map((note) => (
                               <div key={note.id} className="border-b border-slate-100 last:border-0 pb-3 mb-3 last:pb-0 last:mb-0 space-y-1">
                                 <div className="flex items-center justify-between text-[10px] text-slate-400">
                                   <span className="font-bold text-slate-700">{note.author}</span>

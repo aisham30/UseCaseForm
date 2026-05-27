@@ -6,7 +6,7 @@ import {
   MessageSquare, UserPlus, Tag, Check, HelpCircle, Laptop, Settings
 } from "lucide-react";
 import { motion, AnimatePresence } from "framer-motion";
-import { type AdminSubmission, type AdminNote } from "../../lib/supabase";
+import { type AdminSubmission, type AdminNote, normalizeAdminNotes } from "../../lib/supabase";
 import { questions } from "../../data/questions";
 import StatusBadge from "./StatusBadge";
 import PriorityBadge from "./PriorityBadge";
@@ -56,6 +56,8 @@ export default function SubmissionCard({
     admin_notes = [],
     assigned_owner = "Unassigned"
   } = submission;
+
+  const normalizedNotes = normalizeAdminNotes(admin_notes);
 
   // Toggle dynamic tags
   const handleTagToggle = (tag: string) => {
@@ -361,7 +363,7 @@ export default function SubmissionCard({
             <MessageSquare className="size-3.5" />
             Notes
             <span className="font-mono text-[10px] bg-zinc-950 px-1.5 py-0.5 rounded text-zinc-500 font-semibold">
-              {admin_notes.length}
+              {normalizedNotes.length}
             </span>
           </button>
         </div>
@@ -411,7 +413,7 @@ export default function SubmissionCard({
           >
             <div className="pt-4 border-t border-white/5">
               <NotesPanel
-                notes={admin_notes}
+                notes={normalizedNotes}
                 onAddNote={(content) => onAddNote(id, content)}
                 onDeleteNote={onDeleteNote ? (noteId) => onDeleteNote(id, noteId) : undefined}
                 submissionId={id}
