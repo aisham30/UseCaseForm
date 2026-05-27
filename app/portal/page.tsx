@@ -32,7 +32,7 @@ import {
 } from "lucide-react";
 import Link from "next/link";
 import { motion, AnimatePresence } from "framer-motion";
-import { mockSubmissions } from "../data/mockSubmissions";
+
 
 type RequestStatus = 
   | "Draft" 
@@ -53,14 +53,8 @@ export default function EmployeePortalPage() {
   const [statusFilter, setStatusFilter] = useState<string>("All");
   const [sortDirection, setSortDirection] = useState<"asc" | "desc">("desc");
   const [selectedRequest, setSelectedRequest] = useState<Submission | null>(null);
-  const [isEditing, setIsEditing] = useState(false);
-
-  // Edit form state
-  const [editPainPoint, setEditPainPoint] = useState("");
-  const [editDepartment, setEditDepartment] = useState("");
-  const [editSupport, setEditSupport] = useState("");
-  const [editFriction, setEditFriction] = useState("");
-  const [isSavingEdit, setIsSavingEdit] = useState(false);
+  const [auditLogs, setAuditLogs] = useState<any[]>([]);
+  const [isLoadingAuditLogs, setIsLoadingAuditLogs] = useState(false);
 
   const isConfigured = typeof isSupabaseConfigured !== "undefined" ? isSupabaseConfigured : true;
 
@@ -69,62 +63,29 @@ export default function EmployeePortalPage() {
   const employeeEmail = profile?.email || user?.email || "";
   const employeeDept = profile?.department || "Operations";
 
-  async function loadMyRequests() {
+  async function loadMyRequests(silent = false) {
     if (!user) return;
-    setIsLoading(true);
+    if (!silent) setIsLoading(true);
 
     if (!isConfigured || !supabase) {
-      // Local Mode: Filter mock requests belonging to this user
-      // Map mock submissions to match the employee's name for realistic data matching
-      const userSubmissions = mockSubmissions.map((sub, idx) => {
-        // Assign first two mock requests directly to the logged-in mock user for realistic demoing
-        if (idx === 0 || idx === 3) {
-          return {
-            ...sub,
-            user_id: user.id,
-            employee_name: employeeName,
-            department: employeeDept,
-            status: sub.status === "New" ? "Submitted" : sub.status,
-            updated_at: sub.created_at // initial
-          } as unknown as Submission;
-        }
-        return {
-          ...sub,
-          status: sub.status === "New" ? "Submitted" : sub.status,
-          updated_at: sub.created_at
-        } as unknown as Submission;
-      }).filter(sub => sub.user_id === user.id);
-
-      setRequests(userSubmissions);
-      setIsLoading(false);
+      console.warn("Supabase is not configured. Dashboard requires live connection.");
+      setRequests([]);
+      if (!silent) setIsLoading(false);
       setIsRefreshing(false);
       return;
     }
 
     try {
-      // UUID Validation Helper
-      const isValidUUID = (uuid: string | undefined): boolean => {
-        if (!uuid) return false;
-        const regex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-        return regex.test(uuid);
-      };
-
-      // Robust UUID safety guard: If user.id is not a valid UUID (e.g. mock-uid-employee),
-      // we query by employee_name as a fallback, or we query where user_id is null.
-      let query = supabase.from("submissions").select("*");
-      
-      if (isValidUUID(user.id)) {
-        query = query.eq("user_id", user.id);
-      } else {
-        // Fallback for mock users when Supabase is configured
-        query = query.or(`employee_name.eq."${employeeName}",user_id.is.null`);
-      }
-
-      const { data, error } = await query.order("created_at", { ascending: false });
+      // Live authenticated query: strictly loaded by authenticated user_id
+      const { data, error } = await supabase
+        .from("submissions")
+        .select("*")
+        .eq("user_id", user.id)
+        .order("created_at", { ascending: false });
 
       if (error) {
         console.error("Supabase query error:", error);
-        setRequests([]);
+        if (!silent) setRequests([]);
       } else {
         // Map status compatibilities (e.g. New -> Submitted)
         const mapped = (data || []).map(sub => ({
@@ -136,9 +97,9 @@ export default function EmployeePortalPage() {
       }
     } catch (e) {
       console.error("Exception loading submissions:", e);
-      setRequests([]);
+      if (!silent) setRequests([]);
     } finally {
-      setIsLoading(false);
+      if (!silent) setIsLoading(false);
       setIsRefreshing(false);
     }
   }
@@ -154,108 +115,50 @@ export default function EmployeePortalPage() {
     loadMyRequests();
   };
 
+  // Reactively load chronological audit logs whenever details drawer changes selected record
+  useEffect(() => {
+    if (selectedRequest && selectedRequest.id) {
+      loadAuditLogs(selectedRequest.id);
+    } else {
+      setAuditLogs([]);
+    }
+  }, [selectedRequest]);
+
+  async function loadAuditLogs(submissionId: string | number) {
+    setIsLoadingAuditLogs(true);
+    if (!isConfigured || !supabase) {
+      setAuditLogs([]);
+      setIsLoadingAuditLogs(false);
+      return;
+    }
+    try {
+      const { data, error } = await supabase
+        .from("audit_history")
+        .select("*")
+        .eq("submission_id", submissionId)
+        .order("timestamp", { ascending: true });
+
+      if (!error && data) {
+        setAuditLogs(data);
+      } else {
+        console.warn("Could not retrieve audit history (migration may need database execution):", error?.message);
+        setAuditLogs([]);
+      }
+    } catch (e) {
+      console.error("Exception loading audit history trail:", e);
+      setAuditLogs([]);
+    } finally {
+      setIsLoadingAuditLogs(false);
+    }
+  }
+
   // Open Details Drawer & Initialize Editing states
   const handleOpenDetails = (req: Submission) => {
     setSelectedRequest(req);
-    setIsEditing(false);
-    
-    // De-serialize or read fields
-    let painPoint = req.friction || "";
-    let support = req.expected_support || "";
-    try {
-      const parsed = JSON.parse(req.desired_outcome || "");
-      painPoint = parsed.desired_outcome_short || painPoint;
-      support = parsed.expected_support || support;
-    } catch (e) {}
-
-    setEditPainPoint(painPoint);
-    setEditDepartment(req.department || "");
-    setEditSupport(support);
-    setEditFriction(req.friction || "");
   };
 
   // Save Edits directly
-  const handleSaveEdit = async () => {
-    if (!selectedRequest || !user) return;
-    setIsSavingEdit(true);
-
-    const now = new Date().toISOString();
-    const updatedFriction = editFriction;
-    
-    // Parse desired outcome to preserve other 15 answers state and only update edited fields
-    let updatedDesiredOutcome = selectedRequest.desired_outcome || "";
-    try {
-      const parsed = JSON.parse(selectedRequest.desired_outcome || "");
-      parsed.desired_outcome_short = editPainPoint;
-      parsed.department = editDepartment;
-      parsed.expected_support = editSupport;
-      parsed.pain_point_desc = editFriction;
-      updatedDesiredOutcome = JSON.stringify(parsed);
-    } catch (e) {}
-
-    const updatedFields = {
-      department: editDepartment,
-      friction: updatedFriction,
-      expected_support: editSupport,
-      desired_outcome: updatedDesiredOutcome,
-      updated_at: now,
-      employee_name: employeeName // ensure name remains locked
-    };
-
-    if (!isConfigured || !supabase) {
-      // Local Mode update
-      const updatedList = requests.map(req => {
-        if (req.id === selectedRequest.id) {
-          const updated = {
-            ...req,
-            ...updatedFields,
-            // Flag history update
-            status: req.status === "Need More Information" ? "Submitted" : req.status
-          };
-          // Sync details panel
-          setSelectedRequest(updated);
-          return updated;
-        }
-        return req;
-      });
-      setRequests(updatedList);
-      setIsSavingEdit(false);
-      setIsEditing(false);
-      return;
-    }
-
-    try {
-      // If the request was in "Need More Information", we set it back to "Submitted" on edit
-      const nextStatus = selectedRequest.status === "Need More Information" ? "Submitted" : selectedRequest.status;
-      
-      const { error } = await supabase
-        .from("submissions")
-        .update({
-          ...updatedFields,
-          status: nextStatus
-        })
-        .eq("id", selectedRequest.id);
-
-      if (error) {
-        console.error("Failed to update database record:", error);
-        alert("Unable to save edits. Please try again.");
-      } else {
-        // Success
-        const updatedRecord = {
-          ...selectedRequest,
-          ...updatedFields,
-          status: nextStatus
-        };
-        setSelectedRequest(updatedRecord);
-        setIsEditing(false);
-        loadMyRequests();
-      }
-    } catch (e) {
-      console.error("Exception during record update:", e);
-    } finally {
-      setIsSavingEdit(false);
-    }
-  };
+  // Inline edit state variables are removed as editing is fully routed to the intake questionnaire wizard (Phase 3).
 
   // KPIs Calculations
   const kpis = useMemo(() => {
@@ -308,6 +211,13 @@ export default function EmployeePortalPage() {
         return sortDirection === "asc" ? timeA - timeB : timeB - timeA;
       });
   }, [requests, searchQuery, statusFilter, sortDirection]);
+
+  // Dedicated React state diagnostic logging hook
+  useEffect(() => {
+    console.log("[DIAGNOSTIC] Submissions State (requests):", requests);
+    console.log("[DIAGNOSTIC] FilteredSubmissions State (filteredAndSortedRequests):", filteredAndSortedRequests);
+    console.log("[DIAGNOSTIC] SelectedSubmission State (selectedRequest):", selectedRequest);
+  }, [requests, filteredAndSortedRequests, selectedRequest]);
 
   // Relative Time Helper
   const getRelativeTime = (dateStr?: string) => {
@@ -651,258 +561,177 @@ export default function EmployeePortalPage() {
                   {/* Body Content */}
                   <div className="flex-1 space-y-6 min-h-0 overflow-y-auto pr-1 overscroll-contain">
                     
-                    {/* Mode Toggle Edit vs Read */}
-                    {!isEditing ? (
-                      // READ VIEW
-                      <div className="space-y-6">
-                        
-                        {/* Status Card and Triage Badge */}
-                        <div className="bg-slate-50 rounded-2xl p-4.5 border border-slate-100 flex items-center justify-between">
-                          <div>
-                            <span className="text-[8px] font-bold uppercase tracking-wider text-slate-400 block">Current Triage Status</span>
-                            <span className={`inline-flex rounded-full border px-2.5 py-0.5 text-[9px] font-bold mt-1.5 ${statusBadges[selectedRequest.status || "Submitted"] || statusBadges["Submitted"]}`}>
-                              {selectedRequest.status || "Submitted"}
-                            </span>
-                          </div>
+                    {/* READ-ONLY VIEW WITH GxP AUDIT TRAIL TIMELINE */}
+                    <div className="space-y-6">
+                      
+                      {/* Status Card and Triage Badge */}
+                      <div className="bg-slate-50 rounded-2xl p-4.5 border border-slate-100 flex items-center justify-between">
+                        <div>
+                          <span className="text-[8px] font-bold uppercase tracking-wider text-slate-400 block">Current Triage Status</span>
+                          <span className={`inline-flex rounded-full border px-2.5 py-0.5 text-[9px] font-bold mt-1.5 ${statusBadges[selectedRequest.status || "Submitted"] || statusBadges["Submitted"]}`}>
+                            {selectedRequest.status || "Submitted"}
+                          </span>
+                        </div>
 
-                          {/* Render Edit Button conditionally if status permits */}
-                          {["Draft", "Submitted", "Need More Information"].includes(selectedRequest.status || "Submitted") && (
-                            <button
-                              onClick={() => setIsEditing(true)}
-                              className="flex items-center gap-1.5 rounded-xl border border-slate-200 hover:bg-slate-50 text-slate-700 px-3.5 py-2 text-xs font-bold shadow-sm transition cursor-pointer"
-                            >
-                              <Edit2 className="size-3.5" />
-                              Edit Request
-                            </button>
+                        {/* Render Edit Button routing to wizard conditionally if status permits */}
+                        {["Draft", "Submitted", "Need More Information"].includes(selectedRequest.status || "Submitted") && (
+                          <a
+                            href={`/portal/new-request?edit=${selectedRequest.id}`}
+                            className="flex items-center gap-1.5 rounded-xl border border-slate-200 bg-white hover:bg-slate-50 text-slate-700 px-3.5 py-2 text-xs font-bold shadow-sm transition cursor-pointer"
+                          >
+                            <Edit2 className="size-3.5" />
+                            Edit Request
+                          </a>
+                        )}
+                      </div>
+
+                      {/* Deserialized Answers Grid */}
+                      <div className="space-y-4">
+                        {(() => {
+                          let answers: any = null;
+                          try {
+                            answers = JSON.parse(selectedRequest.desired_outcome || "");
+                          } catch (e) {
+                            answers = {
+                              department: selectedRequest.department,
+                              pain_point_desc: selectedRequest.friction || "",
+                              expected_support: selectedRequest.expected_support,
+                              affected_area: [],
+                              systems_involved: selectedRequest.systems_involved || []
+                            };
+                          }
+
+                          return (
+                            <div className="grid gap-4.5 sm:grid-cols-2">
+                              <div className="text-xs">
+                                <span className="block font-bold text-slate-400 mb-1">Colleague Name</span>
+                                <span className="text-slate-800 font-semibold leading-relaxed block bg-white border border-slate-100 rounded-lg p-2.5 shadow-sm">
+                                  {selectedRequest.employee_name}
+                                </span>
+                              </div>
+                              <div className="text-xs">
+                                <span className="block font-bold text-slate-400 mb-1">Department Ownership</span>
+                                <span className="text-slate-800 font-semibold leading-relaxed block bg-white border border-slate-100 rounded-lg p-2.5 shadow-sm">
+                                  {selectedRequest.department}
+                                </span>
+                              </div>
+                              <div className="text-xs sm:col-span-2">
+                                <span className="block font-bold text-slate-400 mb-1">Core Pain Point Description</span>
+                                <span className="text-slate-800 font-semibold leading-relaxed block bg-white border border-slate-100 rounded-lg p-2.5 shadow-sm">
+                                  {selectedRequest.friction || "Not Specified"}
+                                </span>
+                              </div>
+                              <div className="text-xs sm:col-span-2">
+                                <span className="block font-bold text-slate-400 mb-1">Software Tools & Systems Involved</span>
+                                <span className="text-slate-800 font-semibold leading-relaxed block bg-white border border-slate-100 rounded-lg p-2.5 shadow-sm">
+                                  {selectedRequest.systems_involved && selectedRequest.systems_involved.length > 0 
+                                    ? selectedRequest.systems_involved.join(", ") 
+                                    : "Not Specified"}
+                                </span>
+                              </div>
+                              <div className="text-xs">
+                                <span className="block font-bold text-slate-400 mb-1">Primary Support Required</span>
+                                <span className="text-slate-800 font-semibold leading-relaxed block bg-white border border-slate-100 rounded-lg p-2.5 shadow-sm">
+                                  {answers.expected_support || "Not Specified"}
+                                </span>
+                              </div>
+                              <div className="text-xs">
+                                <span className="block font-bold text-slate-400 mb-1">Frequency of Process</span>
+                                <span className="text-slate-800 font-semibold leading-relaxed block bg-white border border-slate-100 rounded-lg p-2.5 shadow-sm">
+                                  {answers.frequency || "Not Specified"}
+                                </span>
+                              </div>
+                            </div>
+                          );
+                        })()}
+                      </div>
+
+                      {/* Reviewer Comments placeholder */}
+                      <div className="border-t border-slate-100 pt-5 space-y-2">
+                        <h4 className="text-[10px] font-extrabold uppercase tracking-wide text-slate-400">Reviewer Triage Feed</h4>
+                        <div className="bg-slate-50/50 border border-slate-100 rounded-2xl p-4.5 text-xs text-slate-500 font-medium leading-relaxed">
+                          {selectedRequest.admin_notes && (selectedRequest.admin_notes as any).length > 0 ? (
+                            (selectedRequest.admin_notes as any).map((note: any) => (
+                              <div key={note.id} className="border-b border-slate-100 last:border-0 pb-3 mb-3 last:pb-0 last:mb-0 space-y-1">
+                                <div className="flex items-center justify-between text-[10px] text-slate-400">
+                                  <span className="font-bold text-slate-700">{note.author}</span>
+                                  <span>{new Date(note.created_at).toLocaleDateString()}</span>
+                                </div>
+                                <p className="text-slate-600 font-semibold">{note.content}</p>
+                              </div>
+                            ))
+                          ) : (
+                            "No triage feedback logged by the Reviewers yet."
                           )}
                         </div>
-
-                        {/* Deserialized Answers Grid */}
-                        <div className="space-y-4">
-                          {(() => {
-                            let answers: any = null;
-                            try {
-                              answers = JSON.parse(selectedRequest.desired_outcome || "");
-                            } catch (e) {
-                              answers = {
-                                department: selectedRequest.department,
-                                pain_point_desc: selectedRequest.friction || "",
-                                expected_support: selectedRequest.expected_support,
-                                affected_area: [],
-                                systems_involved: selectedRequest.systems_involved || []
-                              };
-                            }
-
-                            return (
-                              <div className="grid gap-4.5 sm:grid-cols-2">
-                                <div className="text-xs">
-                                  <span className="block font-bold text-slate-400 mb-1">Colleague Name</span>
-                                  <span className="text-slate-800 font-semibold leading-relaxed block bg-white border border-slate-100 rounded-lg p-2.5 shadow-sm">
-                                    {selectedRequest.employee_name}
-                                  </span>
-                                </div>
-                                <div className="text-xs">
-                                  <span className="block font-bold text-slate-400 mb-1">Department Ownership</span>
-                                  <span className="text-slate-800 font-semibold leading-relaxed block bg-white border border-slate-100 rounded-lg p-2.5 shadow-sm">
-                                    {selectedRequest.department}
-                                  </span>
-                                </div>
-                                <div className="text-xs sm:col-span-2">
-                                  <span className="block font-bold text-slate-400 mb-1">Core Pain Point Description</span>
-                                  <span className="text-slate-800 font-semibold leading-relaxed block bg-white border border-slate-100 rounded-lg p-2.5 shadow-sm">
-                                    {selectedRequest.friction || "Not Specified"}
-                                  </span>
-                                </div>
-                                <div className="text-xs sm:col-span-2">
-                                  <span className="block font-bold text-slate-400 mb-1">Software Tools & Systems Involved</span>
-                                  <span className="text-slate-800 font-semibold leading-relaxed block bg-white border border-slate-100 rounded-lg p-2.5 shadow-sm">
-                                    {selectedRequest.systems_involved && selectedRequest.systems_involved.length > 0 
-                                      ? selectedRequest.systems_involved.join(", ") 
-                                      : "Not Specified"}
-                                  </span>
-                                </div>
-                                <div className="text-xs">
-                                  <span className="block font-bold text-slate-400 mb-1">Primary Support Required</span>
-                                  <span className="text-slate-800 font-semibold leading-relaxed block bg-white border border-slate-100 rounded-lg p-2.5 shadow-sm">
-                                    {answers.expected_support || "Not Specified"}
-                                  </span>
-                                </div>
-                                <div className="text-xs">
-                                  <span className="block font-bold text-slate-400 mb-1">Frequency of Process</span>
-                                  <span className="text-slate-800 font-semibold leading-relaxed block bg-white border border-slate-100 rounded-lg p-2.5 shadow-sm">
-                                    {answers.frequency || "Not Specified"}
-                                  </span>
-                                </div>
-                              </div>
-                            );
-                          })()}
-                        </div>
-
-                        {/* Reviewer Comments placeholder */}
-                        <div className="border-t border-slate-100 pt-5 space-y-2">
-                          <h4 className="text-[10px] font-extrabold uppercase tracking-wide text-slate-400">Reviewer Triage Feed</h4>
-                          <div className="bg-slate-50/50 border border-slate-100 rounded-2xl p-4.5 text-xs text-slate-500 font-medium leading-relaxed">
-                            {selectedRequest.admin_notes && (selectedRequest.admin_notes as any).length > 0 ? (
-                              (selectedRequest.admin_notes as any).map((note: any) => (
-                                <div key={note.id} className="border-b border-slate-100 last:border-0 pb-3 mb-3 last:pb-0 last:mb-0 space-y-1">
-                                  <div className="flex items-center justify-between text-[10px] text-slate-400">
-                                    <span className="font-bold text-slate-700">{note.author}</span>
-                                    <span>{new Date(note.created_at).toLocaleDateString()}</span>
-                                  </div>
-                                  <p className="text-slate-600 font-semibold">{note.content}</p>
-                                </div>
-                              ))
-                            ) : (
-                              "No triage feedback logged by the Reviewers yet."
-                            )}
-                          </div>
-                        </div>
-
-                        {/* Version History Log Timeline */}
-                        <div className="border-t border-slate-100 pt-5 space-y-3.5">
-                          <h4 className="text-[10px] font-extrabold uppercase tracking-wide text-slate-400 flex items-center gap-1">
-                            <History className="size-3.5 text-slate-400" />
-                            Chronological Request Timeline
-                          </h4>
-
-                          <div className="relative border-l border-slate-200 pl-4.5 ml-2.5 space-y-4 text-xs font-semibold text-slate-600">
-                            
-                            {/* Log 1: Created */}
-                            <div className="relative">
-                              <span className="absolute -left-7 top-0.5 flex size-4 items-center justify-center rounded-full bg-blue-100 border border-blue-200" />
-                              <p className="text-slate-800 font-bold">Request Created</p>
-                              <span className="text-[9px] text-slate-400 font-mono mt-0.5 block">{new Date(selectedRequest.created_at || "").toLocaleString()}</span>
-                            </div>
-
-                            {/* Log 2: Updated (Conditional) */}
-                            {selectedRequest.updated_at && selectedRequest.created_at && (new Date(selectedRequest.updated_at).getTime() - new Date(selectedRequest.created_at).getTime()) > 5000 && (
-                              <div className="relative">
-                                <span className="absolute -left-7 top-0.5 flex size-4 items-center justify-center rounded-full bg-indigo-100 border border-indigo-200" />
-                                <p className="text-slate-800 font-bold">
-                                  Request Updated
-                                  <span className="inline-flex rounded bg-blue-50 px-1 py-0.2 text-[8px] font-extrabold text-blue-700 border border-blue-100 ml-1.5">
-                                    Updated
-                                  </span>
-                                </p>
-                                <span className="text-[9px] text-slate-400 font-mono mt-0.5 block">{new Date(selectedRequest.updated_at).toLocaleString()}</span>
-                              </div>
-                            )}
-
-                            {/* Log 3: Reviewer Comments Added (Conditional) */}
-                            {selectedRequest.admin_notes && (selectedRequest.admin_notes as any).length > 0 && (
-                              <div className="relative">
-                                <span className="absolute -left-7 top-0.5 flex size-4 items-center justify-center rounded-full bg-amber-100 border border-amber-200" />
-                                <p className="text-slate-800 font-bold">Reviewer Comment Added</p>
-                                <span className="text-[9px] text-slate-400 font-mono mt-0.5 block">Reviewer feed updated</span>
-                              </div>
-                            )}
-
-                            {/* Log 4: Status Changed */}
-                            {selectedRequest.status && selectedRequest.status !== "Submitted" && (
-                              <div className="relative">
-                                <span className="absolute -left-7 top-0.5 flex size-4 items-center justify-center rounded-full bg-emerald-100 border border-emerald-200" />
-                                <p className="text-slate-800 font-bold">Status Triaged: {selectedRequest.status}</p>
-                              </div>
-                            )}
-
-                          </div>
-                        </div>
-
                       </div>
-                    ) : (
-                      // EDITING WORKSPACE PANEL
-                      <div className="space-y-5 animate-fadeIn">
-                        
-                        <div className="bg-blue-50/50 border border-blue-100 rounded-2xl p-4 text-[11px] leading-relaxed text-blue-800 font-semibold">
-                          * Modify fields. Editing updates the active submission directly in-place and preserves the history logs.
-                        </div>
 
-                        {/* Edit Field 1: Title */}
-                        <div className="space-y-1.5">
-                          <label className="text-[9px] font-extrabold uppercase tracking-wide text-slate-400 block">
-                            Request Short Title
-                          </label>
-                          <input
-                            type="text"
-                            value={editPainPoint}
-                            onChange={(e) => setEditPainPoint(e.target.value)}
-                            className="w-full rounded-xl border border-slate-200 bg-white p-3.5 text-xs text-slate-800 outline-none transition focus:border-blue-600 focus:ring-1 focus:ring-blue-600 shadow-sm"
-                            required
-                          />
-                        </div>
+                      {/* Version History Log Timeline */}
+                      <div className="border-t border-slate-100 pt-5 space-y-3.5">
+                        <h4 className="text-[10px] font-extrabold uppercase tracking-wide text-slate-400 flex items-center gap-1">
+                          <History className="size-3.5 text-slate-400" />
+                          Chronological Request Timeline
+                        </h4>
 
-                        {/* Edit Field 2: Department */}
-                        <div className="space-y-1.5">
-                          <label className="text-[9px] font-extrabold uppercase tracking-wide text-slate-400 block">
-                            Department Ownership
-                          </label>
-                          <input
-                            type="text"
-                            value={editDepartment}
-                            onChange={(e) => setEditDepartment(e.target.value)}
-                            className="w-full rounded-xl border border-slate-200 bg-white p-3.5 text-xs text-slate-800 outline-none transition focus:border-blue-600 focus:ring-1 focus:ring-blue-600 shadow-sm"
-                            required
-                          />
-                        </div>
-
-                        {/* Edit Field 3: Expected support */}
-                        <div className="space-y-1.5">
-                          <label className="text-[9px] font-extrabold uppercase tracking-wide text-slate-400 block">
-                            Technical Support Type
-                          </label>
-                          <input
-                            type="text"
-                            value={editSupport}
-                            onChange={(e) => setEditSupport(e.target.value)}
-                            className="w-full rounded-xl border border-slate-200 bg-white p-3.5 text-xs text-slate-800 outline-none transition focus:border-blue-600 focus:ring-1 focus:ring-blue-600 shadow-sm"
-                            required
-                          />
-                        </div>
-
-                        {/* Edit Field 4: Friction details */}
-                        <div className="space-y-1.5">
-                          <label className="text-[9px] font-extrabold uppercase tracking-wide text-slate-400 block">
-                            Core Pain Point Description
-                          </label>
-                          <textarea
-                            value={editFriction}
-                            onChange={(e) => setEditFriction(e.target.value)}
-                            rows={5}
-                            className="w-full resize-none rounded-xl border border-slate-200 bg-white p-3.5 text-xs text-slate-800 outline-none transition focus:border-blue-600 focus:ring-1 focus:ring-blue-600 shadow-sm"
-                            required
-                          />
-                        </div>
-
-                        {/* Edit Actions buttons */}
-                        <div className="flex items-center gap-3 pt-3">
-                          <button
-                            onClick={handleSaveEdit}
-                            disabled={isSavingEdit}
-                            className="flex-1 inline-flex items-center justify-center gap-2 rounded-xl bg-blue-700 py-3.5 text-xs font-bold text-white shadow-sm hover:bg-blue-800 transition disabled:opacity-60 cursor-pointer"
-                          >
-                            {isSavingEdit ? (
-                              <>
-                                <Loader2 className="h-4.5 w-4.5 animate-spin" />
-                                Saving record changes...
-                              </>
-                            ) : (
-                              <>
-                                <ShieldCheck className="h-4.5 w-4.5" />
-                                Save Opportunity Updates
-                              </>
-                            )}
-                          </button>
+                        <div className="relative border-l border-slate-200 pl-4.5 ml-2.5 space-y-4 text-xs font-semibold text-slate-600">
                           
-                          <button
-                            onClick={() => setIsEditing(false)}
-                            className="rounded-xl border border-slate-200 bg-white hover:bg-slate-50 text-slate-600 px-5 py-3.5 text-xs font-bold transition shadow-sm cursor-pointer"
-                          >
-                            Cancel
-                          </button>
-                        </div>
+                          {/* Log 1: Created */}
+                          <div className="relative animate-fadeIn">
+                            <span className="absolute -left-7 top-0.5 flex size-4 items-center justify-center rounded-full bg-blue-100 border border-blue-200" />
+                            <p className="text-slate-800 font-bold">Request Created</p>
+                            <span className="text-[9px] text-slate-400 font-mono mt-0.5 block">{new Date(selectedRequest.created_at || "").toLocaleString()}</span>
+                          </div>
 
+                          {/* Dynamic Version History logs from database */}
+                          {auditLogs.length > 0 ? (
+                            auditLogs.map((log) => (
+                              <div key={log.id} className="relative animate-fadeIn">
+                                <span className="absolute -left-7 top-0.5 flex size-4 items-center justify-center rounded-full bg-amber-100 border border-amber-200" />
+                                <p className="text-slate-800 font-bold">
+                                  {log.editor_name || "Colleague"} ({log.field_changed === "status" ? "Status Updated" : "Field Modified"})
+                                </p>
+                                <p className="text-[10px] font-semibold text-slate-500 mt-0.5">
+                                  Modified <span className="font-bold text-slate-700 capitalize">{log.field_changed.replace(/_/g, " ")}</span>:{" "}
+                                  <span className="text-slate-400 line-through">{log.old_value || "None"}</span> &rarr;{" "}
+                                  <span className="text-blue-700 font-bold">{log.new_value || "None"}</span>
+                                </p>
+                                <span className="text-[9px] text-slate-400 font-mono mt-0.5 block">
+                                  {new Date(log.timestamp).toLocaleString()}
+                                </span>
+                              </div>
+                            ))
+                          ) : isLoadingAuditLogs ? (
+                            <div className="text-[10px] text-slate-400 font-medium py-2">
+                              Loading GxP audit trail logs...
+                            </div>
+                          ) : null}
+
+                          {/* Fallback Log: Standard Updated Log if audit log is empty but updated_at differs */}
+                          {auditLogs.length === 0 && selectedRequest.updated_at && selectedRequest.created_at && (new Date(selectedRequest.updated_at).getTime() - new Date(selectedRequest.created_at).getTime()) > 5000 && (
+                            <div className="relative animate-fadeIn">
+                              <span className="absolute -left-7 top-0.5 flex size-4 items-center justify-center rounded-full bg-indigo-100 border border-indigo-200" />
+                              <p className="text-slate-800 font-bold">
+                                Request Updated
+                                <span className="inline-flex rounded bg-blue-50 px-1 py-0.2 text-[8px] font-extrabold text-blue-700 border border-blue-100 ml-1.5">
+                                  Updated
+                                </span>
+                              </p>
+                              <span className="text-[9px] text-slate-400 font-mono mt-0.5 block">{new Date(selectedRequest.updated_at).toLocaleString()}</span>
+                            </div>
+                          )}
+
+                          {/* Log: Status Triaged (If modified and not default) */}
+                          {selectedRequest.status && selectedRequest.status !== "Submitted" && selectedRequest.status !== "Draft" && (
+                            <div className="relative animate-fadeIn">
+                              <span className="absolute -left-7 top-0.5 flex size-4 items-center justify-center rounded-full bg-emerald-100 border border-emerald-200" />
+                              <p className="text-slate-800 font-bold">Status Triaged: {selectedRequest.status}</p>
+                            </div>
+                          )}
+
+                        </div>
                       </div>
-                    )}
+
+                    </div>
 
                   </div>
 

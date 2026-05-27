@@ -1,9 +1,9 @@
 "use client";
 
-import React, { useEffect, useState, useMemo } from "react";
+import React, { useEffect, useState, useMemo, useRef } from "react";
 import { AuthGuard } from "../components/AuthGuard";
 import { ProfileDropdown } from "../components/ProfileDropdown";
-import { supabase, isSupabaseConfigured, type Submission } from "../lib/supabase";
+import { supabase, isSupabaseConfigured, type Submission, type AdminNote } from "../lib/supabase";
 import StatusBadge from "../admin/components/StatusBadge";
 import { 
   HeartPulse, 
@@ -24,13 +24,21 @@ import {
   User,
   ArrowUpDown,
   X,
-  FileJson
+  FileJson,
+  Trash2,
+  Send,
+  Plus,
+  Tag,
+  History
 } from "lucide-react";
 import { motion, AnimatePresence } from "framer-motion";
-import { useAuth } from "../lib/auth";
+import { useAuth, getFullName } from "../lib/auth";
+
+const AVAILABLE_TAGS = ["AI", "Automation", "Dashboard", "Process Issue", "Compliance", "Needs Discussion"];
+const AVAILABLE_OWNERS = ["Unassigned", "AI Solutions Team", "Automation Team", "Analytics Support", "IT Operations", "Business Systems"];
 
 export default function ReviewerPortalPage() {
-  const { user } = useAuth();
+  const { user, profile } = useAuth();
   const [submissions, setSubmissions] = useState<Submission[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [isRefreshing, setIsRefreshing] = useState(false);
@@ -38,23 +46,27 @@ export default function ReviewerPortalPage() {
 
   // Search & Filter States
   const [searchQuery, setSearchQuery] = useState("");
-  const [selectedFilter, setSelectedFilter] = useState("All"); // All, Pending, NeedsInfo, Completed
+  const [selectedFilter, setSelectedFilter] = useState("All"); // All, Pending, NeedsInfo, Completed, InProgress
   const [selectedSubmission, setSelectedSubmission] = useState<Submission | null>(null);
   const [isUpdatingStatus, setIsUpdatingStatus] = useState(false);
 
   // Sorting
   const [sortAscending, setSortAscending] = useState(false);
 
-  // Retrieve Supabase config mode safely
-  const isConfigured = typeof isSupabaseConfigured !== "undefined" ? isSupabaseConfigured : true;
+  // GxP Audit Logs States
+  const [auditLogs, setAuditLogs] = useState<any[]>([]);
+  const [isLoadingAuditLogs, setIsLoadingAuditLogs] = useState(false);
 
-  async function loadSubmissions() {
-    setIsLoading(true);
+  // Retrieve Supabase config mode safely
+  const isConfigured = isSupabaseConfigured;
+
+  async function loadSubmissions(silent = false) {
+    if (!silent) setIsLoading(true);
     setErrorMessage("");
 
-    if (!isConfigured || !supabase) {
+    if (!isSupabaseConfigured || !supabase) {
       setErrorMessage("Supabase is not configured. Reviewer dashboard requires live database access.");
-      setIsLoading(false);
+      if (!silent) setIsLoading(false);
       setIsRefreshing(false);
       return;
     }
@@ -68,14 +80,16 @@ export default function ReviewerPortalPage() {
       if (error) {
         console.error("DB Triage error:", error);
         setErrorMessage(`Database failed to load: ${error.message}`);
+        if (!silent) setSubmissions([]);
       } else {
         setSubmissions((data as Submission[]) || []);
       }
     } catch (err: any) {
       console.error("Exception loading submissions for review:", err);
       setErrorMessage(err.message || "An unexpected error occurred while connecting to database.");
+      if (!silent) setSubmissions([]);
     } finally {
-      setIsLoading(false);
+      if (!silent) setIsLoading(false);
       setIsRefreshing(false);
     }
   }
@@ -87,6 +101,170 @@ export default function ReviewerPortalPage() {
   const handleRefresh = () => {
     setIsRefreshing(true);
     loadSubmissions();
+  };
+
+  // Reactively load GxP audit logs when a submission is selected
+  useEffect(() => {
+    if (selectedSubmission && selectedSubmission.id) {
+      loadAuditLogs(selectedSubmission.id);
+    } else {
+      setAuditLogs([]);
+    }
+  }, [selectedSubmission]);
+
+  async function loadAuditLogs(submissionId: string | number) {
+    setIsLoadingAuditLogs(true);
+    if (!isSupabaseConfigured || !supabase) {
+      setAuditLogs([]);
+      setIsLoadingAuditLogs(false);
+      return;
+    }
+    try {
+      const { data, error } = await supabase
+        .from("audit_history")
+        .select("*")
+        .eq("submission_id", submissionId)
+        .order("timestamp", { ascending: true });
+
+      if (!error && data) {
+        setAuditLogs(data);
+      } else {
+        console.warn("Could not retrieve audit history:", error?.message);
+        setAuditLogs([]);
+      }
+    } catch (e) {
+      console.error("Exception loading audit history trail:", e);
+      setAuditLogs([]);
+    } finally {
+      setIsLoadingAuditLogs(false);
+    }
+  }
+
+  // Update submission triage fields (with GxP audit logging!)
+  const updateSubmissionField = async (
+    id: string | number, 
+    field: keyof Submission, 
+    value: any
+  ) => {
+    if (!id || !isSupabaseConfigured || !supabase) return;
+    setIsUpdatingStatus(true);
+
+    // Fetch the old value to record exact changes in audit log
+    let oldValue = "";
+    if (selectedSubmission) {
+      let oldValRaw = selectedSubmission[field];
+      if (field === "assigned_owner") {
+        oldValRaw = selectedSubmission.assigned_owner || selectedSubmission.assigned_to || "Unassigned";
+      }
+      oldValue = Array.isArray(oldValRaw) ? oldValRaw.join(", ") : String(oldValRaw || "");
+    }
+
+    const oldValueStr = oldValue;
+    const newValueStr = Array.isArray(value) ? value.join(", ") : String(value || "");
+
+    // Keep frontend field 'assigned_owner' mapped to PostgreSQL column 'assigned_to'
+    let dbField = field as string;
+    if (dbField === "assigned_owner") {
+      dbField = "assigned_to";
+    }
+
+    const updatePayload = {
+      [dbField]: value,
+      updated_at: new Date().toISOString()
+    };
+
+    try {
+      const eqId = typeof id === "number" ? id : (isNaN(Number(id)) ? id : Number(id));
+      console.log(`[DIAGNOSTIC] Review update - ID: ${eqId}, Payload:`, updatePayload);
+
+      const { data: dbRecords, error } = await supabase
+        .from("submissions")
+        .update(updatePayload)
+        .eq("id", eqId)
+        .select();
+
+      const affectedRows = dbRecords ? dbRecords.length : 0;
+      let dbRecord = null;
+      let updateError = error;
+
+      if (!updateError && affectedRows === 0) {
+        console.warn("⚠️ Warning: UPDATE in Review Portal returned 0 rows. Checking diagnostics...");
+        const { data: existCheck } = await supabase
+          .from("submissions")
+          .select("id")
+          .eq("id", eqId);
+        const recordExists = existCheck && existCheck.length > 0;
+
+        updateError = {
+          message: recordExists 
+            ? "Database update returned 0 rows. This action was blocked by RLS policies." 
+            : `Record with ID ${eqId} does not exist in the database.`,
+          code: "PGRST116_REVIEW_UPDATE_ZERO_ROWS",
+          details: `User ${user?.id} attempted to update submission ${eqId}. Record exists in DB: ${recordExists}`,
+          hint: "Ensure the record exists and that your RLS update/select policies permit reviewers to write/read."
+        } as any;
+      } else if (dbRecords && dbRecords.length > 0) {
+        dbRecord = dbRecords[0];
+      }
+
+      if (updateError) {
+        console.error("[DIAGNOSTIC] Review Field update failed:", updateError);
+        alert(`Unable to save triage changes: ${updateError.message}`);
+      } else {
+        console.log("[DIAGNOSTIC] Review update success. DB Response:", dbRecord);
+        
+        const updatedRecord = {
+          ...selectedSubmission,
+          [field]: value,
+          assigned_owner: dbRecord?.assigned_to || dbRecord?.assigned_owner || value,
+          assigned_to: dbRecord?.assigned_to || value,
+          ...(dbRecord || {})
+        } as Submission;
+
+        // 1. Update selected state immediately
+        setSelectedSubmission(updatedRecord);
+
+        // 2. Replace inside master submissions list
+        setSubmissions(prev => prev.map(sub => String(sub.id) === String(id) ? updatedRecord : sub));
+
+        // 3. Trigger silent refresh
+        loadSubmissions(true);
+
+        // 4. Record GxP Audit Log Entry
+        if (oldValueStr !== newValueStr) {
+          const displayName = profile?.full_name || (user ? getFullName(user) : "Triage Lead Reviewer");
+          const auditEntry = {
+            submission_id: id,
+            editor_user_id: user?.id || null,
+            editor_name: displayName,
+            field_changed: field,
+            old_value: oldValueStr,
+            new_value: newValueStr,
+            timestamp: new Date().toISOString()
+          };
+
+          const { error: auditError } = await supabase
+            .from("audit_history")
+            .insert([auditEntry]);
+
+          if (auditError) {
+            console.warn("Could not insert audit history record:", auditError.message);
+          } else {
+            console.log("Recorded version history log for:", field);
+            loadAuditLogs(id);
+          }
+        }
+      }
+    } catch (e) {
+      console.error("Exception updating submission field (Review):", e);
+    } finally {
+      setIsUpdatingStatus(false);
+    }
+  };
+
+  const handleUpdateStatus = (statusValue: Required<Submission>["status"]) => {
+    if (!selectedSubmission) return;
+    updateSubmissionField(selectedSubmission.id!, "status", statusValue);
   };
 
   // Safe helper to extract and display urgency parsed from desired_outcome answers state
@@ -110,35 +288,6 @@ export default function ReviewerPortalPage() {
         return "bg-blue-500/10 text-blue-500 border-blue-500/20";
       default:
         return "bg-slate-500/10 text-slate-500 border-slate-500/20";
-    }
-  };
-
-  // Triaged status updating
-  const handleUpdateStatus = async (statusValue: Required<Submission>["status"]) => {
-    if (!selectedSubmission || !isConfigured || !supabase) return;
-    setIsUpdatingStatus(true);
-
-    try {
-      const { error } = await supabase
-        .from("submissions")
-        .update({ status: statusValue, updated_at: new Date().toISOString() })
-        .eq("id", selectedSubmission.id);
-
-      if (error) {
-        console.error("Failed to update status:", error);
-        alert(`Failed to update status in database: ${error.message}`);
-      } else {
-        // Update local state
-        const updatedRecord = { ...selectedSubmission, status: statusValue, updated_at: new Date().toISOString() };
-        setSelectedSubmission(updatedRecord);
-        setSubmissions(prev => 
-          prev.map(sub => String(sub.id) === String(selectedSubmission.id) ? updatedRecord : sub)
-        );
-      }
-    } catch (err: any) {
-      console.error("Exception during status triage:", err);
-    } finally {
-      setIsUpdatingStatus(false);
     }
   };
 
@@ -490,15 +639,16 @@ export default function ReviewerPortalPage() {
                 </div>
 
                 {/* Drawer Content */}
-                <div className="flex-1 space-y-6">
+                <div className="flex-1 space-y-6 overflow-y-auto pr-1 overscroll-contain">
                   
-                  {/* TRIAGING ACTIONS WORKSPACE */}
-                  <div className="rounded-2xl border border-amber-100 bg-amber-50/15 p-5 shadow-sm space-y-3.5">
-                    <h3 className="text-xs font-extrabold uppercase tracking-wider text-amber-800 flex items-center gap-1.5">
+                  {/* TRIAGING ACTIONS WORKSPACE (Phase 4) */}
+                  <div className="rounded-2xl border border-amber-100 bg-amber-50/15 p-5 shadow-sm space-y-5">
+                    <h3 className="text-xs font-extrabold uppercase tracking-wider text-amber-800 flex items-center gap-1.5 border-b border-amber-200/50 pb-2">
                       <Zap className="size-3.5 shrink-0 text-amber-600" />
                       Live Triaging Workflow
                     </h3>
                     
+                    {/* Status Triage Buttons */}
                     <div className="space-y-1.5">
                       <label className="text-[9px] font-extrabold uppercase tracking-wider text-slate-400 block">
                         Triage Phase Status
@@ -528,10 +678,81 @@ export default function ReviewerPortalPage() {
                         ))}
                       </div>
                     </div>
+
+                    {/* Technical Assignment Select */}
+                    <div className="space-y-1.5">
+                      <label className="text-[9px] font-extrabold uppercase tracking-wider text-slate-400 block">
+                        Assigned Technical Owner
+                      </label>
+                      <select
+                        value={selectedSubmission.assigned_owner || selectedSubmission.assigned_to || "Unassigned"}
+                        disabled={isUpdatingStatus}
+                        onChange={(e) => updateSubmissionField(selectedSubmission.id!, "assigned_owner", e.target.value)}
+                        className="w-full bg-white border border-slate-200 rounded-xl px-3 py-2.5 text-xs text-slate-800 outline-none cursor-pointer transition shadow-sm focus:border-amber-500"
+                      >
+                        {AVAILABLE_OWNERS.map((own) => (
+                          <option key={own} value={own}>{own}</option>
+                        ))}
+                      </select>
+                    </div>
+
+                    {/* Opportunity Tagging */}
+                    <div className="space-y-1.5">
+                      <label className="text-[9px] font-extrabold uppercase tracking-wider text-slate-400 block">
+                        Triage Tag Labels
+                      </label>
+                      <div className="flex flex-wrap gap-1.5">
+                        {AVAILABLE_TAGS.map((tagItem) => {
+                          const currentTags = selectedSubmission.tags || [];
+                          const isTagged = currentTags.includes(tagItem);
+                          return (
+                            <button
+                              key={tagItem}
+                              disabled={isUpdatingStatus}
+                              onClick={() => {
+                                const nextTags = isTagged 
+                                  ? currentTags.filter(t => t !== tagItem)
+                                  : [...currentTags, tagItem];
+                                updateSubmissionField(selectedSubmission.id!, "tags", nextTags);
+                              }}
+                              className={`px-2.5 py-1 text-[10px] font-bold rounded-lg border transition cursor-pointer flex items-center gap-1 ${
+                                isTagged 
+                                  ? "bg-amber-50/80 border-amber-300 text-amber-800 font-extrabold"
+                                  : "bg-white border-slate-200 text-slate-500 hover:border-slate-300"
+                              }`}
+                            >
+                              <Tag className="size-2.5" />
+                              {tagItem}
+                            </button>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Collaborative review comments (Phase 4) */}
+                  <div className="border-t border-slate-100 pt-5">
+                    <NotesSection
+                      notes={selectedSubmission.admin_notes || []}
+                      onAddNote={(content) => {
+                        const newNoteObj: AdminNote = {
+                          id: "note-" + Date.now(),
+                          author: profile?.full_name || (user ? getFullName(user) : "Triage Lead Reviewer"),
+                          content,
+                          created_at: new Date().toISOString()
+                        };
+                        const nextNotes = [...(selectedSubmission.admin_notes || []), newNoteObj];
+                        updateSubmissionField(selectedSubmission.id!, "admin_notes", nextNotes);
+                      }}
+                      onDeleteNote={(noteId) => {
+                        const nextNotes = (selectedSubmission.admin_notes || []).filter(n => n.id !== noteId);
+                        updateSubmissionField(selectedSubmission.id!, "admin_notes", nextNotes);
+                      }}
+                    />
                   </div>
 
                   {/* SUBMISSION SPECS */}
-                  <div className="space-y-4">
+                  <div className="space-y-4 border-t border-slate-100 pt-5">
                     <h3 className="text-xs font-extrabold uppercase tracking-wider text-slate-400 flex items-center gap-1.5 border-b border-slate-100 pb-2">
                       <FileText className="size-3.5 text-slate-400" />
                       Opportunity Specifications
@@ -623,14 +844,57 @@ export default function ReviewerPortalPage() {
                     </div>
                   </div>
 
+                  {/* Version History GxP chronological timeline (Phase 5) */}
+                  <div className="border-t border-slate-100 pt-5 space-y-3.5">
+                    <h3 className="text-xs font-extrabold uppercase tracking-wider text-slate-400 flex items-center gap-1.5 border-b border-slate-100 pb-2">
+                      <History className="size-3.5 text-slate-400" />
+                      Chronological Request Timeline
+                    </h3>
+
+                    <div className="relative border-l border-slate-200 pl-4.5 ml-2.5 space-y-4 text-xs font-semibold text-slate-600">
+                      
+                      {/* Log 1: Created */}
+                      <div className="relative animate-fadeIn">
+                        <span className="absolute -left-7 top-0.5 flex size-4 items-center justify-center rounded-full bg-blue-100 border border-blue-200" />
+                        <p className="text-slate-800 font-bold">Request Created</p>
+                        <span className="text-[9px] text-slate-400 font-mono mt-0.5 block">{new Date(selectedSubmission.created_at || "").toLocaleString()}</span>
+                      </div>
+
+                      {/* Dynamic Audit logs from database */}
+                      {auditLogs.length > 0 ? (
+                        auditLogs.map((log) => (
+                          <div key={log.id} className="relative animate-fadeIn">
+                            <span className="absolute -left-7 top-0.5 flex size-4 items-center justify-center rounded-full bg-amber-100 border border-amber-200" />
+                            <p className="text-slate-800 font-bold">
+                              {log.editor_name || "Reviewer"} ({log.field_changed === "status" ? "Status Triaged" : "Triage Updated"})
+                            </p>
+                            <p className="text-[10px] font-semibold text-slate-500 mt-0.5">
+                              Modified <span className="font-bold text-slate-700 capitalize">{log.field_changed.replace(/_/g, " ")}</span>:{" "}
+                              <span className="text-slate-400 line-through">{log.old_value || "None"}</span> &rarr;{" "}
+                              <span className="text-blue-700 font-bold">{log.new_value || "None"}</span>
+                            </p>
+                            <span className="text-[9px] text-slate-400 font-mono mt-0.5 block">
+                              {new Date(log.timestamp).toLocaleString()}
+                            </span>
+                          </div>
+                        ))
+                      ) : isLoadingAuditLogs ? (
+                        <div className="text-[10px] text-slate-400 font-medium py-2">
+                          Loading version control history...
+                        </div>
+                      ) : null}
+
+                    </div>
+                  </div>
+
                   {/* AUDIT METADATA TIMESTAMPS */}
-                  <div className="space-y-3.5">
+                  <div className="space-y-3.5 border-t border-slate-100 pt-5">
                     <h3 className="text-xs font-extrabold uppercase tracking-wider text-slate-400 flex items-center gap-1.5 border-b border-slate-100 pb-2">
                       <Clock className="size-3.5 text-slate-400" />
                       GxP Audit Information
                     </h3>
 
-                    <div className="grid grid-cols-2 gap-4 text-[10px] font-semibold text-slate-500 leading-relaxed">
+                    <div className="grid grid-cols-2 gap-4 text-[10px] font-semibold text-slate-500 leading-relaxed pb-4">
                       <div>
                         <span className="text-[8px] font-extrabold uppercase tracking-wider text-slate-400 block">
                           Opportunity Created
@@ -654,5 +918,110 @@ export default function ReviewerPortalPage() {
 
       </main>
     </AuthGuard>
+  );
+}
+
+// Inlined NotesSection for self-contained comments triaging support in Reviewer Dashboard
+function NotesSection({
+  notes = [],
+  onAddNote,
+  onDeleteNote
+}: {
+  notes: AdminNote[];
+  onAddNote: (content: string) => void;
+  onDeleteNote: (noteId: string) => void;
+}) {
+  const [text, setText] = useState("");
+  const feedRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    feedRef.current?.scrollIntoView({ behavior: "smooth" });
+  }, [notes.length]);
+
+  const handleSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!text.trim()) return;
+    onAddNote(text.trim());
+    setText("");
+  };
+
+  return (
+    <div className="flex flex-col rounded-2xl border border-slate-100 bg-slate-50/50 overflow-hidden">
+      {/* Header */}
+      <div className="flex items-center gap-2 border-b border-slate-200/60 px-4 py-3 bg-slate-100/30">
+        <Activity className="size-4 text-blue-600" />
+        <span className="text-xs font-bold uppercase tracking-wider text-slate-500">
+          Collaborative Triage Notes ({notes.length})
+        </span>
+      </div>
+
+      {/* Feed */}
+      <div className="p-4 space-y-3 max-h-[220px] overflow-y-auto overscroll-contain">
+        {notes.length === 0 ? (
+          <div className="text-center py-6 text-slate-400 text-xs font-medium">
+            No administrative notes captured yet.
+          </div>
+        ) : (
+          notes.map((note) => (
+            <div
+              key={note.id}
+              className="group relative rounded-xl border border-slate-200 bg-white p-3 hover:shadow-sm transition"
+            >
+              <div className="flex items-center justify-between mb-1 text-[10px]">
+                <div className="flex items-center gap-1.5 font-bold text-slate-800">
+                  <div className="flex size-4.5 items-center justify-center rounded-full bg-slate-100 text-slate-600 font-semibold border border-slate-200">
+                    <User className="size-2.5" />
+                  </div>
+                  <span>{note.author}</span>
+                </div>
+                
+                <div className="flex items-center gap-2 text-slate-400 font-medium">
+                  <span>
+                    {new Date(note.created_at).toLocaleDateString([], {
+                      month: "short",
+                      day: "numeric",
+                      hour: "2-digit",
+                      minute: "2-digit",
+                    })}
+                  </span>
+                  
+                  <button
+                    onClick={() => onDeleteNote(note.id)}
+                    className="opacity-0 group-hover:opacity-100 p-0.5 text-slate-400 hover:text-rose-600 rounded transition cursor-pointer"
+                    title="Delete Note"
+                  >
+                    <Trash2 className="size-3" />
+                  </button>
+                </div>
+              </div>
+              <p className="text-slate-600 leading-relaxed break-words pl-1 text-[11px] font-medium">
+                {note.content}
+              </p>
+            </div>
+          ))
+        )}
+        <div ref={feedRef} />
+      </div>
+
+      {/* Form */}
+      <form onSubmit={handleSubmit} className="border-t border-slate-200/60 p-3 bg-white">
+        <div className="relative flex items-center">
+          <input
+            type="text"
+            value={text}
+            onChange={(e) => setText(e.target.value)}
+            placeholder="Add a collaborative notes log..."
+            className="w-full rounded-xl border border-slate-200 bg-slate-50 py-2 pl-3 pr-10 text-xs text-slate-800 placeholder-slate-400 outline-none transition focus:border-blue-500 focus:bg-white shadow-inner"
+          />
+          <button
+            type="submit"
+            disabled={!text.trim()}
+            className="absolute right-2 p-1.5 rounded-lg text-slate-400 hover:text-blue-600 disabled:opacity-30 disabled:hover:text-slate-400 transition cursor-pointer"
+          >
+            <Send className="size-3.5" />
+          </button>
+        </div>
+      </form>
+    </div>
   );
 }

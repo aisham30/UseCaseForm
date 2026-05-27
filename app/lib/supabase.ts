@@ -28,6 +28,7 @@ export type Submission = {
   tags?: string[];
   admin_notes?: AdminNote[];
   assigned_owner?: string;
+  assigned_to?: string;
 };
 
 // Strongly typed for the Admin Dashboard where id and created_at are guaranteed to exist

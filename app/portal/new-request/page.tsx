@@ -2,6 +2,7 @@
 
 import { useMemo, useState, useEffect } from "react";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { AnimatePresence, motion } from "framer-motion";
 import { ArrowLeft, ArrowRight, CheckCircle2, Loader2, ShieldCheck, HeartPulse, Sparkles, AlertTriangle } from "lucide-react";
 import { sections, Question, Section } from "../../data/questions";
@@ -51,6 +52,7 @@ const initialState: FormState = {
 
 export default function NewRequestPage() {
   const { user, profile } = useAuth();
+  const router = useRouter();
   const [started, setStarted] = useState(false);
   const [currentSectionIndex, setCurrentSectionIndex] = useState(0);
   const [answers, setAnswers] = useState<FormState>(initialState);
@@ -59,16 +61,99 @@ export default function NewRequestPage() {
   const [status, setStatus] = useState<"idle" | "success" | "error">("idle");
   const [submitErrorMsg, setSubmitErrorMsg] = useState("");
 
+  // Edit Mode States
+  const [editId, setEditId] = useState<string | null>(null);
+  const [originalAnswers, setOriginalAnswers] = useState<FormState | null>(null);
+  const [originalStatus, setOriginalStatus] = useState<string>("Submitted");
+  const [isLoadingRecord, setIsLoadingRecord] = useState(false);
+
+  const isConfigured = typeof supabase !== "undefined";
+
+  // 1. Detect edit URL parameter safely to bypass Next.js build-time errors
+  useEffect(() => {
+    if (typeof window !== "undefined") {
+      const params = new URLSearchParams(window.location.search);
+      const edit = params.get("edit");
+      if (edit) {
+        setEditId(edit);
+        setStarted(true); // Skip welcome screen directly in edit mode
+      }
+    }
+  }, []);
+
+  // 2. Pre-populate all 15 questionnaire fields from Supabase in Edit Mode
+  useEffect(() => {
+    if (!editId || !isConfigured || !supabase) return;
+
+    async function loadRecordToEdit() {
+      setIsLoadingRecord(true);
+      try {
+        const { data, error } = await supabase
+          .from("submissions")
+          .select("*")
+          .eq("id", editId)
+          .single();
+
+        if (error) {
+          console.error("Error loading record to edit:", error);
+          setSubmitErrorMsg(`Failed to load request details: ${error.message}`);
+          setStatus("error");
+        } else if (data) {
+          console.log("[DIAGNOSTIC] Loaded submission details for edit:", data);
+          let loadedAnswers: FormState = { ...initialState };
+          
+          if (data.desired_outcome) {
+            try {
+              const parsed = JSON.parse(data.desired_outcome);
+              loadedAnswers = {
+                ...loadedAnswers,
+                ...parsed,
+                employee_name: data.employee_name || parsed.employee_name || loadedAnswers.employee_name,
+                department: data.department || parsed.department || loadedAnswers.department,
+              };
+            } catch (e) {
+              console.error("Exception parsing desired_outcome JSON:", e);
+            }
+          } else {
+            // Fallback parsing individual columns
+            loadedAnswers = {
+              ...loadedAnswers,
+              employee_name: data.employee_name || loadedAnswers.employee_name,
+              department: data.department || loadedAnswers.department,
+              pain_point_desc: data.friction || loadedAnswers.pain_point_desc,
+              expected_support: data.expected_support || loadedAnswers.expected_support,
+              frequency: data.frequency || loadedAnswers.frequency,
+              people_impacted: data.people_impacted || loadedAnswers.people_impacted,
+              affected_area: data.affected_area ? data.affected_area.split(", ") : [],
+              friction: data.work_type ? data.work_type.split(", ") : [],
+              systems_involved: data.systems_involved || [],
+            };
+          }
+
+          setAnswers(loadedAnswers);
+          setOriginalAnswers(loadedAnswers);
+          setOriginalStatus(data.status || "Submitted");
+        }
+      } catch (e) {
+        console.error("Exception loading record details:", e);
+      } finally {
+        setIsLoadingRecord(false);
+      }
+    }
+
+    loadRecordToEdit();
+  }, [editId]);
+
   // Dynamically synchronize the employee's name from their authenticated session profile
   useEffect(() => {
-    if (user) {
+    if (user && !editId) {
       const displayName = profile?.full_name || getFullName(user);
       setAnswers((prev) => ({
         ...prev,
         employee_name: displayName,
       }));
     }
-  }, [user, profile]);
+  }, [user, profile, editId]);
 
   const currentSection = sections[currentSectionIndex];
 
@@ -109,18 +194,42 @@ export default function NewRequestPage() {
     setStatus("idle");
     setSubmitErrorMsg("");
 
-    // UUID Validation Helper
-    const isValidUUID = (uuid: string | undefined): boolean => {
-      if (!uuid) return false;
-      const regex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-      return regex.test(uuid);
-    };
+    // 1. Fetch the authenticated Supabase session
+    const { data: { session }, error: sessionError } = await supabase.auth.getSession();
+    
+    console.log("=== SUBMISSION INTAKE SESSION INQUIRY ===");
+    console.log("Supabase getSession response error:", sessionError);
+    console.log("Supabase active session present:", !!session);
 
-    // Format fields cleanly to save in database columns
+    // 2. Reject submission if session is missing or unauthenticated
+    if (sessionError || !session || !session.user) {
+      console.error("❌ STAGING SECURITY ADVISORY: Authentication session missing or invalid.");
+      setSubmitErrorMsg("Your authentication session has expired or is invalid. Please log in again.");
+      setStatus("error");
+      setIsSubmitting(false);
+      
+      // Auto redirect to login
+      setTimeout(() => {
+        router.push("/login");
+      }, 3000);
+      return;
+    }
+
+    const sessionUser = session.user;
+    console.log("Authenticated User UID:", sessionUser.id);
+
+    // 3. Extract employee name and department automatically from authenticated user profile or metadata
+    const displayName = profile?.full_name || sessionUser.user_metadata?.full_name || getFullName(sessionUser as any) || answers.employee_name;
+    const displayDept = answers.department || profile?.department || "Operations";
+
+    // 4. Format payload fields to exactly match database columns
+    const isEditMode = Boolean(editId);
+    const nextStatus = originalStatus === "Need More Information" ? "Submitted" : originalStatus;
+
     const payload: Submission = {
-      user_id: isValidUUID(user?.id) ? user?.id : undefined, // Securely associate request with logged-in user id
-      employee_name: answers.employee_name,
-      department: answers.department,
+      user_id: sessionUser.id, // Securely associate request with authenticated session user ID
+      employee_name: displayName,
+      department: displayDept,
       affected_area: answers.affected_area.join(", "),
       work_type: answers.friction.join(", "),
       friction: answers.pain_point_desc,
@@ -129,29 +238,209 @@ export default function NewRequestPage() {
       expected_support: answers.expected_support,
       systems_involved: answers.systems_involved,
       desired_outcome: JSON.stringify(answers), // Serialize complete state answers
-      status: "Submitted", // Set default status to Submitted
+      status: (isEditMode ? nextStatus : "Submitted") as any,
     };
 
-    console.log("Submitting Opportunity Payload:", payload);
-
-    const { data: insertResult, error } = await supabase.from("submissions").insert([payload]).select();
-
-    if (error) {
-      console.error("================================");
-      console.error("SUPABASE SUBMISSION ERROR");
-      console.error("================================");
-      console.error("Message:", error.message);
-      console.error("Details:", error.details);
-      console.error("Hint:", error.hint);
-      console.error("Full Error Object:", error);
-
-      setSubmitErrorMsg(error.message || "Unknown Supabase database error");
-      setStatus("error");
-    } else {
-      console.log("Submission saved! Insert Result:", insertResult);
-      setStatus("success");
+    if (isEditMode) {
+      payload.updated_at = new Date().toISOString();
     }
-    setIsSubmitting(false);
+
+    console.log("Submission Payload prepared:", payload);
+
+    let error = null;
+
+    try {
+      if (isEditMode) {
+        const submissionId = parseInt(editId || "", 10);
+        console.log("=== EDIT PERSISTENCE SAVE HANDLER CALLED ===");
+        console.log("Submission ID:", submissionId);
+        console.log("Payload:", payload);
+        console.log("User ID:", sessionUser.id);
+
+        const { data: updateResult, error: updateError } = await supabase
+          .from("submissions")
+          .update(payload)
+          .eq("id", submissionId)
+          .select();
+        
+        console.log("Supabase response:", updateResult);
+        console.log("Supabase error:", updateError);
+
+        const affectedRows = updateResult ? updateResult.length : 0;
+        console.log("Affected rows count:", affectedRows);
+
+        if (updateError) {
+          error = updateError;
+        } else if (affectedRows === 0) {
+          console.warn("⚠️ Warning: UPDATE succeeded but returned 0 rows. Performing diagnostics...");
+          
+          // Verify if the record exists in the database
+          const { data: existCheck, error: existError } = await supabase
+            .from("submissions")
+            .select("id, user_id")
+            .eq("id", submissionId);
+            
+          const recordExists = existCheck && existCheck.length > 0;
+          console.log("Record exists verification:", recordExists ? "YES" : "NO");
+          if (existError) console.error("Exist verification query error:", existError);
+
+          // Detailed logging (Rule 4 & 8)
+          console.log("=== PGRST116 PRE-EMPTIVE DIAGNOSTICS ===");
+          console.log("Submission ID:", submissionId);
+          console.log("User ID:", sessionUser.id);
+          console.log("Payload:", payload);
+          console.log("Affected rows:", affectedRows);
+          console.log("Record exists in DB:", recordExists);
+          if (recordExists) {
+            console.log("Owner user_id of existing record in DB:", existCheck[0].user_id);
+          }
+
+          if (!recordExists) {
+            error = {
+              message: `Record with ID ${submissionId} does not exist in the database.`,
+              code: "PGRST116_NOT_FOUND",
+              details: "The update target ID was not found.",
+              hint: "Ensure you are editing an existing record that has not been deleted."
+            };
+          } else {
+            error = {
+              message: "Database update returned 0 rows. This is typically caused by Row Level Security (RLS) policies blocking SELECT or UPDATE permissions on this record.",
+              code: "PGRST116_RLS_VIOLATION",
+              details: `User ${sessionUser.id} is not permitted to update or select submission ${submissionId}.`,
+              hint: "Audit your RLS policies on the submissions table to ensure the user has SELECT and UPDATE access."
+            };
+          }
+        } else {
+          // Success case - read first row safely (Rule 7)
+          const updatedRow = updateResult[0];
+          console.log("[DIAGNOSTIC] Safe row read success:", updatedRow);
+
+          // 6. After save, immediately fetch the updated row from Supabase.
+          console.log("--- B. DATABASE IMMEDIATE VERIFICATION ---");
+          const { data: fetchedRow, error: fetchError } = await supabase
+            .from("submissions")
+            .select("*")
+            .eq("id", submissionId)
+            .single();
+
+          if (fetchError) {
+            console.error("6. Error fetching updated row from database:", fetchError);
+          } else if (fetchedRow) {
+            console.log("6. Fetched updated database row:", fetchedRow);
+
+            // 7. Compare: old values vs new values
+            console.log("7. Comparing old values vs new values:");
+            console.log("Old values:", originalAnswers ? JSON.stringify(originalAnswers) : "None");
+            console.log("New values:", fetchedRow.desired_outcome);
+
+            // Check individual key difference
+            let oldFriction = originalAnswers?.pain_point_desc || "";
+            let newFriction = fetchedRow.friction || "";
+            console.log(`Friction (pain_point_desc): "${oldFriction}" -> "${newFriction}"`);
+
+            let oldOutcomeShort = originalAnswers?.desired_outcome_short || "";
+            let newOutcomeShort = "";
+            try {
+              const parsed = JSON.parse(fetchedRow.desired_outcome || "{}");
+              newOutcomeShort = parsed.desired_outcome_short || "";
+            } catch (e) {}
+            console.log(`Desired Outcome Short Title: "${oldOutcomeShort}" -> "${newOutcomeShort}"`);
+
+            // 8. Confirm database row actually changes
+            const hasChanged = JSON.stringify(originalAnswers) !== fetchedRow.desired_outcome || oldFriction !== newFriction;
+            console.log(`8. Confirm database row actually changes: ${hasChanged ? "CONFIRMED" : "NO CHANGE DETECTED"}`);
+          }
+
+          // Phase 5: Calculate modifications and record GxP version logs
+          const auditEntries: any[] = [];
+          const fieldsToCompare = Object.keys(initialState) as Array<keyof FormState>;
+          
+          for (const field of fieldsToCompare) {
+            // Skip colleague name as it is locked
+            if (field === "employee_name") continue;
+
+            const oldValue = originalAnswers ? originalAnswers[field] : "";
+            const newValue = answers[field];
+            
+            const oldValueStr = Array.isArray(oldValue) ? oldValue.join(", ") : String(oldValue || "");
+            const newValueStr = Array.isArray(newValue) ? newValue.join(", ") : String(newValue || "");
+            
+            if (oldValueStr !== newValueStr) {
+              auditEntries.push({
+                submission_id: submissionId,
+                editor_user_id: sessionUser.id,
+                editor_name: displayName,
+                field_changed: field,
+                old_value: oldValueStr,
+                new_value: newValueStr,
+                timestamp: new Date().toISOString()
+              });
+            }
+          }
+
+          if (auditEntries.length > 0) {
+            console.log("[DIAGNOSTIC] Appending audit trail logs to database:", auditEntries);
+            const { error: auditError } = await supabase
+              .from("audit_history")
+              .insert(auditEntries);
+            
+            if (auditError) {
+              console.warn("Could not insert version logs (migration table not active):", auditError.message);
+            } else {
+              console.log("Successfully appended GxP audit entries!");
+            }
+          }
+        }
+      } else {
+        console.log("[DIAGNOSTIC] Executing Supabase INSERT for new Opportunity.");
+        const { data: insertResult, error: insertError } = await supabase
+          .from("submissions")
+          .insert([payload])
+          .select();
+        
+        console.log("Supabase insert response:", insertResult);
+        console.log("Supabase insert error:", insertError);
+
+        const insertedRows = insertResult ? insertResult.length : 0;
+        console.log("Inserted rows count:", insertedRows);
+
+        if (insertError) {
+          error = insertError;
+        } else if (insertedRows === 0) {
+          console.warn("⚠️ Warning: INSERT succeeded but returned 0 rows. RLS SELECT blocking detected.");
+          error = {
+            message: "Database insert returned 0 rows. The record was successfully created, but Row Level Security (RLS) policies blocked the SELECT permission required to return the row.",
+            code: "PGRST116_RLS_INSERT_SELECT_VIOLATION",
+            details: `User ${sessionUser.id} is not permitted to select the newly created submission.`,
+            hint: "Check your SELECT policy on public.submissions to ensure it allows authenticated users to read their own rows."
+          };
+        } else {
+          console.log("[DIAGNOSTIC] Safe insert row read success:", insertResult[0]);
+        }
+      }
+
+      if (error) {
+        console.error("❌ SUPABASE TRANSACTION ERROR:");
+        console.error("Message:", error.message);
+        console.error("Details:", error.details);
+        console.error("Hint:", error.hint);
+        console.error("Code:", error.code);
+        
+        setSubmitErrorMsg(
+          `Database transaction error: ${error.message} (Details: ${error.details || "None"}. Hint: ${error.hint || "None"})`
+        );
+        setStatus("error");
+      } else {
+        console.log("✅ Success: Opportunity changes written to Supabase!");
+        setStatus("success");
+      }
+    } catch (e: any) {
+      console.error("Exception during database query:", e);
+      setSubmitErrorMsg(e.message || "An unexpected runtime exception occurred.");
+      setStatus("error");
+    } finally {
+      setIsSubmitting(false);
+    }
   };
 
   return (
@@ -179,18 +468,23 @@ export default function NewRequestPage() {
                 </p>
               </div>
             </Link>
-            <Link
+            <a
               href="/portal"
               className="rounded-xl border border-slate-200 bg-white px-4 py-2 text-xs font-bold text-slate-600 shadow-sm transition hover:border-slate-300 hover:bg-slate-50 hover:text-slate-950"
             >
               Back to Dashboard
-            </Link>
+            </a>
           </nav>
 
-          {!started ? (
+          {isLoadingRecord ? (
+            <div className="flex flex-col items-center justify-center py-32 gap-4">
+              <Loader2 className="h-8 w-8 animate-spin text-blue-800" />
+              <p className="text-xs font-bold uppercase tracking-wider text-slate-500">Retrieving Opportunity Details...</p>
+            </div>
+          ) : !started ? (
             <WelcomeScreen onStart={() => setStarted(true)} />
           ) : status === "success" ? (
-            <SuccessState />
+            <SuccessState isEdit={Boolean(editId)} />
           ) : (
             <div className="mx-auto max-w-3xl">
               {/* Section Progress Bar */}
@@ -224,6 +518,7 @@ export default function NewRequestPage() {
                       onSubmit={handleSubmit}
                       isSubmitting={isSubmitting}
                       status={status}
+                      isEdit={Boolean(editId)}
                       submitErrorMsg={submitErrorMsg}
                       onEditSection={(sectionIndex) => {
                         setCurrentSectionIndex(sectionIndex);
@@ -309,7 +604,7 @@ export default function NewRequestPage() {
                                   type="text"
                                   value={val as string}
                                   onChange={(e) => updateAnswer(q.id, e.target.value)}
-                                  disabled={q.id === "employee_name"} // Dynamic enterprise lock: pre-filled employee name is read-only
+                                  disabled={q.id === "employee_name"} // Prefilled colleague name is read-only
                                   placeholder={q.placeholder}
                                   className="w-full rounded-xl border border-slate-200 bg-white p-3.5 text-xs text-slate-800 outline-none transition placeholder:text-slate-400 focus:border-blue-600 focus:ring-1 focus:ring-blue-600 shadow-sm disabled:bg-slate-50 disabled:text-slate-500 disabled:cursor-not-allowed disabled:border-slate-100"
                                 />
@@ -381,12 +676,12 @@ function WelcomeScreen({ onStart }: { onStart: () => void }) {
           Start New Opportunity Request
           <ArrowRight className="h-4 w-4 stroke-[2.5]" />
         </button>
-        <Link 
+        <a 
           href="/portal"
           className="inline-flex items-center justify-center gap-2 rounded-xl border border-slate-200 bg-white px-5 py-4 text-xs font-bold text-slate-500 shadow-sm hover:bg-slate-50"
         >
           View Submitted Requests
-        </Link>
+        </a>
       </div>
     </motion.section>
   );
@@ -397,6 +692,7 @@ function ReviewScreen({
   onSubmit,
   isSubmitting,
   status,
+  isEdit,
   submitErrorMsg,
   onEditSection,
 }: {
@@ -404,6 +700,7 @@ function ReviewScreen({
   onSubmit: () => void;
   isSubmitting: boolean;
   status: "idle" | "success" | "error";
+  isEdit: boolean;
   submitErrorMsg: string;
   onEditSection: (index: number) => void;
 }) {
@@ -482,12 +779,12 @@ function ReviewScreen({
         {isSubmitting ? (
           <>
             <Loader2 className="h-4.5 w-4.5 animate-spin" />
-            Saving Request Opportunity...
+            {isEdit ? "Saving Opportunity Changes..." : "Saving Request Opportunity..."}
           </>
         ) : (
           <>
             <CheckCircle2 className="h-4.5 w-4.5 stroke-[2.5]" />
-            Submit AI & Automation Opportunity
+            {isEdit ? "Save Opportunity Changes" : "Submit AI & Automation Opportunity"}
           </>
         )}
       </button>
@@ -495,7 +792,7 @@ function ReviewScreen({
   );
 }
 
-function SuccessState() {
+function SuccessState({ isEdit }: { isEdit?: boolean }) {
   return (
     <motion.section
       initial={{ opacity: 0, y: 15 }}
@@ -505,24 +802,30 @@ function SuccessState() {
       <div className="mx-auto mb-6 flex h-12 w-12 items-center justify-center rounded-xl bg-emerald-50 text-emerald-600 border border-emerald-100 shadow-sm">
         <CheckCircle2 className="h-6 w-6 stroke-[2.2]" />
       </div>
-      <h1 className="text-2xl font-extrabold tracking-tight text-slate-900">Request Captured Successfully.</h1>
+      <h1 className="text-2xl font-extrabold tracking-tight text-slate-900">
+        {isEdit ? "Changes Saved Successfully." : "Request Captured Successfully."}
+      </h1>
       <p className="mt-3.5 text-xs text-slate-500 leading-relaxed font-semibold">
-        Thank you for submitting your AI & Automation opportunity. Your request has been securely created in your Employee Portal and queued for review.
+        {isEdit
+          ? "Your opportunity edits have been securely saved to Supabase and the GxP audit trail timeline updated."
+          : "Thank you for submitting your AI & Automation opportunity. Your request has been securely created in your Employee Portal and queued for review."}
       </p>
       <div className="mt-8 flex flex-col gap-3.5 sm:flex-row justify-center">
-        <Link
+        <a
           href="/portal"
           className="inline-flex items-center justify-center rounded-xl bg-slate-900 px-5 py-3 text-xs font-bold text-white shadow-sm hover:bg-slate-800"
         >
           Return to Portal
-        </Link>
-        <button
-          type="button"
-          onClick={() => window.location.reload()}
-          className="inline-flex items-center justify-center rounded-xl border border-slate-200 bg-white px-5 py-3 text-xs font-bold text-slate-600 shadow-sm hover:bg-slate-50 cursor-pointer"
-        >
-          Submit Another Request
-        </button>
+        </a>
+        {!isEdit && (
+          <button
+            type="button"
+            onClick={() => window.location.reload()}
+            className="inline-flex items-center justify-center rounded-xl border border-slate-200 bg-white px-5 py-3 text-xs font-bold text-slate-600 shadow-sm hover:bg-slate-50 cursor-pointer"
+          >
+            Submit Another Request
+          </button>
+        )}
       </div>
     </motion.section>
   );

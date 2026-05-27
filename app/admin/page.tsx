@@ -33,10 +33,12 @@ import {
   ChevronRight,
   UserPlus,
   ArrowLeft,
-  ArrowRight
+  ArrowRight,
+  History
 } from "lucide-react";
+import { useAuth, getFullName } from "../lib/auth";
 import { motion, AnimatePresence } from "framer-motion";
-import { mockSubmissions } from "../data/mockSubmissions";
+
 import { sections, questions, Question } from "../data/questions";
 import { AuthGuard } from "../components/AuthGuard";
 import { ProfileDropdown } from "../components/ProfileDropdown";
@@ -45,10 +47,58 @@ const AVAILABLE_TAGS = ["AI", "Automation", "Dashboard", "Process Issue", "Compl
 const AVAILABLE_OWNERS = ["Unassigned", "AI Solutions Team", "Automation Team", "Analytics Support", "IT Operations", "Business Systems"];
 
 export default function AdminPage() {
+  const { user, profile } = useAuth();
   const [submissions, setSubmissions] = useState<AdminSubmission[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [errorMessage, setErrorMessage] = useState("");
+
+  // Safe checks for Supabase configuration
+  const isConfigured = typeof isSupabaseConfigured !== "undefined" ? isSupabaseConfigured : true;
+
+  // Detail Drawer state
+  const [selectedSubmission, setSelectedSubmission] = useState<AdminSubmission | null>(null);
+
+  // Version history trail states
+  const [auditLogs, setAuditLogs] = useState<any[]>([]);
+  const [isLoadingAuditLogs, setIsLoadingAuditLogs] = useState(false);
+
+  // Reactively fetch audit timeline records
+  useEffect(() => {
+    if (selectedSubmission && selectedSubmission.id) {
+      loadAuditLogs(selectedSubmission.id);
+    } else {
+      setAuditLogs([]);
+    }
+  }, [selectedSubmission]);
+
+  async function loadAuditLogs(submissionId: string | number) {
+    setIsLoadingAuditLogs(true);
+    if (!isConfigured || !supabase) {
+      setAuditLogs([]);
+      setIsLoadingAuditLogs(false);
+      return;
+    }
+    try {
+      const { data, error } = await supabase
+        .from("audit_history")
+        .select("*")
+        .eq("submission_id", submissionId)
+        .order("timestamp", { ascending: true });
+
+      if (!error && data) {
+        setAuditLogs(data);
+      } else {
+        console.warn("Could not load audit timeline in Admin:", error?.message);
+        setAuditLogs([]);
+      }
+    } catch (e) {
+      console.error("Exception loading admin audit logs:", e);
+      setAuditLogs([]);
+    } finally {
+      setIsLoadingAuditLogs(false);
+    }
+  }
 
   // Search & Filter States
   const [searchQuery, setSearchQuery] = useState("");
@@ -72,12 +122,6 @@ export default function AdminPage() {
   // Toast Notification State
   const [toast, setToast] = useState<{ message: string; type: "success" | "error" } | null>(null);
 
-  // Detail Drawer state
-  const [selectedSubmission, setSelectedSubmission] = useState<AdminSubmission | null>(null);
-
-  // Safe checks for Supabase configuration
-  const isConfigured = typeof isSupabaseConfigured !== "undefined" ? isSupabaseConfigured : true;
-
   const showToast = (message: string, type: "success" | "error") => {
     setToast({ message, type });
   };
@@ -95,14 +139,15 @@ export default function AdminPage() {
     setCurrentPage(1);
   }, [searchQuery, selectedDept, selectedStatus, selectedSupport, selectedFrequency, selectedDateRange]);
 
-  async function loadSubmissions() {
-    setIsLoading(true);
+  async function loadSubmissions(silent = false) {
+    if (!silent) setIsLoading(true);
     setErrorMessage("");
     
     if (!isConfigured || !supabase) {
-      console.log("Supabase not configured, using mock submissions.");
-      setSubmissions(mockSubmissions);
-      setIsLoading(false);
+      console.warn("Supabase is not configured. Admin console requires live database connection.");
+      setErrorMessage("Supabase is not configured. Admin console requires live database access.");
+      setSubmissions([]);
+      if (!silent) setIsLoading(false);
       setIsRefreshing(false);
       return;
     }
@@ -115,16 +160,17 @@ export default function AdminPage() {
 
       if (error) {
         console.error("DB Query error:", error);
-        setErrorMessage("Error loading from Supabase. Falling back to local data.");
-        setSubmissions(mockSubmissions);
+        setErrorMessage(`Error loading from Supabase: ${error.message}`);
+        if (!silent) setSubmissions([]);
       } else {
         setSubmissions((data as AdminSubmission[]) || []);
       }
-    } catch (err) {
+    } catch (err: any) {
       console.error("Error loading submissions:", err);
-      setSubmissions(mockSubmissions);
+      setErrorMessage(err.message || "An unexpected error occurred while loading staging opportunities.");
+      if (!silent) setSubmissions([]);
     } finally {
-      setIsLoading(false);
+      if (!silent) setIsLoading(false);
       setIsRefreshing(false);
     }
   }
@@ -144,6 +190,26 @@ export default function AdminPage() {
     field: keyof Submission, 
     value: any
   ) => {
+    // Validate ID
+    if (!id) {
+      console.error("[DIAGNOSTIC] Aborting update (Admin): ID is missing/undefined!");
+      showToast("Unable to save changes: Submission ID is missing.", "error");
+      return;
+    }
+
+    // Capture the old value to record exact changes in GxP audit log
+    let oldValue = "";
+    if (selectedSubmission) {
+      let oldValRaw = selectedSubmission[field];
+      if (field === "assigned_owner") {
+        oldValRaw = selectedSubmission.assigned_owner || selectedSubmission.assigned_to || "Unassigned";
+      }
+      oldValue = Array.isArray(oldValRaw) ? oldValRaw.join(", ") : String(oldValRaw || "");
+    }
+
+    const oldValueStr = oldValue;
+    const newValueStr = Array.isArray(value) ? value.join(", ") : String(value || "");
+
     // Capture previous state in case we need to roll back
     let previousSubmissions: AdminSubmission[] = [];
     setSubmissions((prev) => {
@@ -169,19 +235,129 @@ export default function AdminPage() {
     try {
       // Safe casting of ID targeting bigint database IDs
       const eqId = typeof id === "number" ? id : (isNaN(Number(id)) ? id : Number(id));
-      const { error } = await supabase
-        .from("submissions")
-        .update({ [field]: value })
-        .eq("id", eqId);
+      
+      // Map frontend field 'assigned_owner' to correct PostgreSQL column 'assigned_to'
+      let dbField = field as string;
+      if (dbField === "assigned_owner") {
+        dbField = "assigned_to";
+      }
 
-      if (error) {
-        console.error("Error updating submission field:", error);
+      const updatePayload = {
+        [dbField]: value,
+        updated_at: new Date().toISOString()
+      };
+
+      console.log(`[DIAGNOSTIC] === BEFORE UPDATE (Admin) ===`);
+      console.log("[DIAGNOSTIC] ID:", id);
+      console.log("[DIAGNOSTIC] DB Field Target:", dbField);
+      console.log("[DIAGNOSTIC] Update Payload:", updatePayload);
+      console.log("[DIAGNOSTIC] Selected Submission State:", selectedSubmission);
+
+      const { data: dbRecords, error } = await supabase
+        .from("submissions")
+        .update(updatePayload)
+        .eq("id", eqId)
+        .select();
+
+      const affectedRows = dbRecords ? dbRecords.length : 0;
+      let dbRecord = null;
+      let updateError = error;
+
+      if (!updateError && affectedRows === 0) {
+        console.warn("⚠️ Warning: UPDATE in Admin Console returned 0 rows. Checking diagnostics...");
+        const { data: existCheck } = await supabase
+          .from("submissions")
+          .select("id")
+          .eq("id", eqId);
+        const recordExists = existCheck && existCheck.length > 0;
+
+        updateError = {
+          message: recordExists 
+            ? "Database update returned 0 rows. This action was blocked by RLS policies." 
+            : `Record with ID ${eqId} does not exist in the database.`,
+          code: "PGRST116_ADMIN_UPDATE_ZERO_ROWS",
+          details: `Admin user ${user?.id} attempted to update submission ${eqId}. Record exists in DB: ${recordExists}`,
+          hint: "Verify system RLS policies and table primary key consistency."
+        } as any;
+      } else if (dbRecords && dbRecords.length > 0) {
+        dbRecord = dbRecords[0];
+      }
+
+      if (updateError) {
+        console.error("[DIAGNOSTIC] === UPDATE FAILED (Admin) ===");
+        console.error("error.code:", updateError.code);
+        console.error("error.message:", updateError.message);
+        console.error("error.details:", updateError.details);
+        console.error("error.hint:", updateError.hint);
+        console.error("JSON.stringify(error):", JSON.stringify(updateError));
         // Rollback state
         if (previousSubmissions.length > 0) setSubmissions(previousSubmissions);
         if (previousSelected) setSelectedSubmission(previousSelected);
-        showToast("Unable to save changes. Please try again.", "error");
+        showToast(`Unable to save changes: ${updateError.message}`, "error");
       } else {
+        console.log("[DIAGNOSTIC] === AFTER UPDATE (Admin) ===");
+        console.log("[DIAGNOSTIC] Database Response:", dbRecord);
+
+        // Keep local frontend state fully compatible with both column schemas
+        const updatedRecord = {
+          ...(previousSelected || selectedSubmission || {}),
+          [field]: value,
+          assigned_owner: dbRecord?.assigned_to || dbRecord?.assigned_owner || value,
+          assigned_to: dbRecord?.assigned_to || value,
+          ...(dbRecord || {})
+        } as AdminSubmission;
+
+        console.log("[DIAGNOSTIC] Updated Record (Admin state):", updatedRecord);
+
+        // 1. Update selected state immediately
+        setSelectedSubmission((prev) => (prev && String(prev.id) === String(id) ? updatedRecord : prev));
+
+        // 2. Update submissions array immediately using safe string ID matching
+        setSubmissions((prev) =>
+          prev.map((sub) => (String(sub.id) === String(id) ? updatedRecord : sub))
+        );
+
         showToast(field === "status" ? "Status updated successfully" : "Field updated successfully", "success");
+        
+        // 3. Trigger silent sync in background
+        loadSubmissions(true);
+
+        // 4. Record GxP Audit Trail Entry
+        if (oldValueStr !== newValueStr) {
+          const displayName = profile?.full_name || (user ? getFullName(user) : "System Administrator");
+          const auditEntry = {
+            submission_id: id,
+            editor_user_id: user?.id || null,
+            editor_name: displayName,
+            field_changed: field,
+            old_value: oldValueStr,
+            new_value: newValueStr,
+            timestamp: new Date().toISOString()
+          };
+
+          const { error: auditError } = await supabase
+            .from("audit_history")
+            .insert([auditEntry]);
+
+          if (auditError) {
+            console.warn("Could not insert admin audit history:", auditError.message);
+          } else {
+            console.log("Successfully recorded version history log for admin change:", field);
+            loadAuditLogs(id);
+          }
+        }
+
+        // 5. Immediate Database Verification fetch
+        const { data: verifiedRecord } = await supabase
+          .from("submissions")
+          .select("*")
+          .eq("id", eqId)
+          .single();
+
+        if (verifiedRecord) {
+          console.log("[DIAGNOSTIC] Verification Fetch Success (Admin). DB Current Row:", verifiedRecord);
+          console.log(`[DIAGNOSTIC] Verification Comparison: Does ${dbField} match?`, verifiedRecord[dbField] === value);
+        }
       }
     } catch (e) {
       console.error("Exception updating field:", e);
@@ -322,6 +498,13 @@ export default function AdminPage() {
       return matchesSearch && matchesDept && matchesStatus && matchesSupport && matchesFrequency && matchesDate;
     });
   }, [submissions, searchQuery, selectedDept, selectedStatus, selectedSupport, selectedFrequency, selectedDateRange]);
+
+  // Dedicated React state diagnostic logging hook
+  useEffect(() => {
+    console.log("[DIAGNOSTIC] Submissions State (submissions):", submissions);
+    console.log("[DIAGNOSTIC] FilteredSubmissions State (filteredSubmissions):", filteredSubmissions);
+    console.log("[DIAGNOSTIC] SelectedSubmission State (selectedSubmission):", selectedSubmission);
+  }, [submissions, filteredSubmissions, selectedSubmission]);
 
   // Sort Submissions
   const sortedSubmissions = useMemo(() => {
@@ -1178,7 +1361,7 @@ export default function AdminPage() {
                       onAddNote={(content) => {
                         const newNoteObj: AdminNote = {
                           id: "note-" + Date.now(),
-                          author: "Admin Coordinator",
+                          author: profile?.full_name || (user ? getFullName(user) : "Admin Coordinator"),
                           content,
                           created_at: new Date().toISOString()
                         };
@@ -1190,6 +1373,49 @@ export default function AdminPage() {
                         updateSubmissionField(selectedSubmission.id, "admin_notes", nextNotes);
                       }}
                     />
+                  </div>
+
+                  {/* Version History Log Timeline (Phase 5) */}
+                  <div className="border-t border-slate-100 pt-5 space-y-3.5 pb-4">
+                    <h4 className="text-[10px] font-extrabold uppercase tracking-wide text-slate-400 flex items-center gap-1">
+                      <History className="size-3.5 text-slate-400" />
+                      Chronological Request Timeline
+                    </h4>
+
+                    <div className="relative border-l border-slate-200 pl-4.5 ml-2.5 space-y-4 text-xs font-semibold text-slate-600">
+                      
+                      {/* Log 1: Created */}
+                      <div className="relative animate-fadeIn">
+                        <span className="absolute -left-7 top-0.5 flex size-4 items-center justify-center rounded-full bg-blue-100 border border-blue-200" />
+                        <p className="text-slate-800 font-bold">Request Created</p>
+                        <span className="text-[9px] text-slate-400 font-mono mt-0.5 block">{new Date(selectedSubmission.created_at || "").toLocaleString()}</span>
+                      </div>
+
+                      {/* Dynamic Audit logs from database */}
+                      {auditLogs.length > 0 ? (
+                        auditLogs.map((log) => (
+                          <div key={log.id} className="relative animate-fadeIn">
+                            <span className="absolute -left-7 top-0.5 flex size-4 items-center justify-center rounded-full bg-amber-100 border border-amber-200" />
+                            <p className="text-slate-800 font-bold">
+                              {log.editor_name || "Colleague"} ({log.field_changed === "status" ? "Status Triaged" : "Triage Updated"})
+                            </p>
+                            <p className="text-[10px] font-semibold text-slate-500 mt-0.5">
+                              Modified <span className="font-bold text-slate-700 capitalize">{log.field_changed.replace(/_/g, " ")}</span>:{" "}
+                              <span className="text-slate-400 line-through">{log.old_value || "None"}</span> &rarr;{" "}
+                              <span className="text-blue-700 font-bold">{log.new_value || "None"}</span>
+                            </p>
+                            <span className="text-[9px] text-slate-400 font-mono mt-0.5 block">
+                              {new Date(log.timestamp).toLocaleString()}
+                            </span>
+                          </div>
+                        ))
+                      ) : isLoadingAuditLogs ? (
+                        <div className="text-[10px] text-slate-400 font-medium py-2">
+                          Loading version control history...
+                        </div>
+                      ) : null}
+
+                    </div>
                   </div>
                 </div>
               </motion.div>
