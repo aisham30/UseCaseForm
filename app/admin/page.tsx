@@ -49,6 +49,49 @@ const AVAILABLE_OWNERS = ["Unassigned", "AI Solutions Team", "Automation Team", 
 export default function AdminPage() {
   const { user, profile } = useAuth();
   const [submissions, setSubmissions] = useState<AdminSubmission[]>([]);
+
+  // Formatted Request Number helper (Rule 6)
+  const formatRequestNumber = (id: number | string | undefined): string => {
+    if (!id) return "GLM-OPP-0000";
+    const numId = Number(id);
+    if (isNaN(numId)) return `GLM-OPP-${String(id).substring(0, 4).toUpperCase()}`;
+    return `GLM-OPP-${String(numId).padStart(4, '0')}`;
+  };
+
+  // Delete Request Workflow (Rule 8)
+  const handleDeleteRequest = async (id: number | string) => {
+    const confirmed = window.confirm("Are you sure you want to permanently delete this opportunity request from the system? This action is irreversible.");
+    if (!confirmed) return;
+
+    try {
+      const numId = typeof id === "number" ? id : parseInt(String(id), 10);
+      console.log("[DIAGNOSTIC] Admin executing Supabase DELETE for Opportunity:", numId);
+      
+      const { error } = await supabase
+        .from("submissions")
+        .delete()
+        .eq("id", numId);
+
+      if (error) {
+        console.error("Delete failed:", error);
+        showToast(`Failed to delete request: ${error.message}`, "error");
+      } else {
+        console.log("Delete succeeded for Opportunity:", numId);
+        
+        // 1. Close drawer
+        setSelectedSubmission(null);
+        
+        // 2. Remove from local state (Single Source of Truth)
+        setSubmissions(prev => prev.filter(r => Number(r.id) !== numId));
+        
+        // 3. Success toast
+        showToast("Opportunity request has been deleted successfully.", "success");
+      }
+    } catch (e: any) {
+      console.error("Exception deleting request:", e);
+      showToast(`An error occurred: ${e.message}`, "error");
+    }
+  };
   const [isLoading, setIsLoading] = useState(true);
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [errorMessage, setErrorMessage] = useState("");
@@ -1200,7 +1243,7 @@ export default function AdminPage() {
                 <div className="shrink-0 flex items-center justify-between border-b border-slate-100 pb-4 mb-6">
                   <div>
                     <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400 block">
-                      colleague opportunity details
+                      colleague opportunity details &mdash; {formatRequestNumber(selectedSubmission.id)}
                     </span>
                     <h2 className="text-lg font-extrabold text-slate-900 tracking-tight mt-0.5">
                       {getEmployeeName(selectedSubmission)}
@@ -1351,6 +1394,28 @@ export default function AdminPage() {
                         <option value="Completed">Completed</option>
                         <option value="Rejected">Rejected</option>
                       </select>
+                    </div>
+                  </div>
+
+                  {/* Administrative Actions (Rule 8) */}
+                  <div className="border-t border-slate-100 pt-5 space-y-2">
+                    <label className="text-[10px] font-extrabold uppercase tracking-wide text-slate-400 block">
+                      Administrative Commands
+                    </label>
+                    <div className="bg-rose-50/50 border border-rose-100 rounded-2xl p-4 flex items-center justify-between">
+                      <div>
+                        <h4 className="text-xs font-bold text-rose-800">Permanent opportunity deletion</h4>
+                        <p className="text-[10px] font-medium text-rose-600/80 mt-0.5 leading-normal max-w-[320px]">
+                          Warning: Deleting this request will completely remove it from the system and all queues. This is irreversible.
+                        </p>
+                      </div>
+                      <button
+                        onClick={() => handleDeleteRequest(selectedSubmission.id)}
+                        className="flex items-center gap-1.5 rounded-xl bg-rose-700 hover:bg-rose-800 text-white px-4 py-2.5 text-xs font-bold shadow-md shadow-rose-700/10 transition cursor-pointer"
+                      >
+                        <X className="size-3.5" />
+                        Delete Request
+                      </button>
                     </div>
                   </div>
 

@@ -157,6 +157,49 @@ export default function EmployeePortalPage() {
     setSelectedRequest(req);
   };
 
+  // Formatted Request Number helper (Rule 6)
+  const formatRequestNumber = (id: number | string | undefined): string => {
+    if (!id) return "GLM-OPP-0000";
+    const numId = Number(id);
+    if (isNaN(numId)) return `GLM-OPP-${String(id).substring(0, 4).toUpperCase()}`;
+    return `GLM-OPP-${String(numId).padStart(4, '0')}`;
+  };
+
+  // Delete Request Workflow (Rule 8)
+  const handleDeleteRequest = async (id: number | string) => {
+    const confirmed = window.confirm("Are you sure you want to delete this opportunity request? This action is permanent and cannot be undone.");
+    if (!confirmed) return;
+
+    try {
+      const numId = typeof id === "number" ? id : parseInt(String(id), 10);
+      console.log("[DIAGNOSTIC] Executing Supabase DELETE for Opportunity:", numId);
+      
+      const { error } = await supabase
+        .from("submissions")
+        .delete()
+        .eq("id", numId);
+
+      if (error) {
+        console.error("Delete failed:", error);
+        alert(`Failed to delete request: ${error.message}`);
+      } else {
+        console.log("Delete succeeded for Opportunity:", numId);
+        
+        // 1. Close drawer
+        setSelectedRequest(null);
+        
+        // 2. Remove from local state (Single Source of Truth)
+        setRequests(prev => prev.filter(r => Number(r.id) !== numId));
+        
+        // 3. Success notification
+        alert("Opportunity request has been deleted successfully.");
+      }
+    } catch (e: any) {
+      console.error("Exception deleting request:", e);
+      alert(`An error occurred: ${e.message}`);
+    }
+  };
+
   // Save Edits directly
   // Inline edit state variables are removed as editing is fully routed to the intake questionnaire wizard (Phase 3).
 
@@ -476,7 +519,7 @@ export default function EmployeePortalPage() {
                             className="hover:bg-slate-50/60 cursor-pointer transition"
                           >
                             <td className="px-6 py-4 font-mono text-[10px] font-bold text-slate-400 truncate">
-                              #{String(req.id).substring(0, 8)}
+                              {formatRequestNumber(req.id)}
                             </td>
                             <td className="px-4 py-4 truncate">
                               <div className="flex flex-col gap-0.5">
@@ -536,7 +579,7 @@ export default function EmployeePortalPage() {
                   <div className="shrink-0 flex items-center justify-between border-b border-slate-100 pb-4 mb-6">
                     <div>
                       <span className="text-[9px] font-bold uppercase tracking-widest text-slate-400 block">
-                        Enterprise Submission Details
+                        Enterprise Submission Details &mdash; {formatRequestNumber(selectedRequest.id)}
                       </span>
                       <h2 className="text-lg font-extrabold text-slate-900 tracking-tight mt-1 truncate max-w-[500px]">
                         {(() => {
@@ -573,16 +616,29 @@ export default function EmployeePortalPage() {
                           </span>
                         </div>
 
-                        {/* Render Edit Button routing to wizard conditionally if status permits */}
-                        {["Draft", "Submitted", "Need More Information"].includes(selectedRequest.status || "Submitted") && (
-                          <a
-                            href={`/portal/new-request?edit=${selectedRequest.id}`}
-                            className="flex items-center gap-1.5 rounded-xl border border-slate-200 bg-white hover:bg-slate-50 text-slate-700 px-3.5 py-2 text-xs font-bold shadow-sm transition cursor-pointer"
-                          >
-                            <Edit2 className="size-3.5" />
-                            Edit Request
-                          </a>
-                        )}
+                        <div className="flex items-center gap-2">
+                          {/* Render Edit Button routing to wizard conditionally if status permits */}
+                          {["Draft", "Submitted", "Need More Information"].includes(selectedRequest.status || "Submitted") && (
+                            <a
+                              href={`/portal/new-request?edit=${selectedRequest.id}`}
+                              className="flex items-center gap-1.5 rounded-xl border border-slate-200 bg-white hover:bg-slate-50 text-slate-700 px-3.5 py-2 text-xs font-bold shadow-sm transition cursor-pointer"
+                            >
+                              <Edit2 className="size-3.5" />
+                              Edit
+                            </a>
+                          )}
+
+                          {/* Render Delete Button conditionally if status permits (Rule 8) */}
+                          {["Draft", "Submitted", "Need More Information"].includes(selectedRequest.status || "Submitted") && (
+                            <button
+                              onClick={() => selectedRequest.id && handleDeleteRequest(selectedRequest.id)}
+                              className="flex items-center gap-1.5 rounded-xl border border-rose-200 bg-rose-50 hover:bg-rose-100 text-rose-700 px-3.5 py-2 text-xs font-bold shadow-sm transition cursor-pointer"
+                            >
+                              <X className="size-3.5" />
+                              Delete
+                            </button>
+                          )}
+                        </div>
                       </div>
 
                       {/* Deserialized Answers Grid */}

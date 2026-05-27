@@ -39,6 +39,14 @@ const AVAILABLE_OWNERS = ["Unassigned", "AI Solutions Team", "Automation Team", 
 
 export default function ReviewerPortalPage() {
   const { user, profile } = useAuth();
+
+  // Formatted Request Number helper (Rule 6)
+  const formatRequestNumber = (id: number | string | undefined): string => {
+    if (!id) return "GLM-OPP-0000";
+    const numId = Number(id);
+    if (isNaN(numId)) return `GLM-OPP-${String(id).substring(0, 4).toUpperCase()}`;
+    return `GLM-OPP-${String(numId).padStart(4, '0')}`;
+  };
   const [submissions, setSubmissions] = useState<Submission[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [isRefreshing, setIsRefreshing] = useState(false);
@@ -541,7 +549,7 @@ export default function ReviewerPortalPage() {
                               className="border-b border-slate-50 hover:bg-slate-50/50 cursor-pointer group transition duration-150"
                             >
                               <td className="py-4 font-mono font-bold text-slate-500">
-                                #{sub.id}
+                                {formatRequestNumber(sub.id)}
                               </td>
                               <td className="py-4">
                                 <div className="flex items-center gap-2">
@@ -625,7 +633,7 @@ export default function ReviewerPortalPage() {
                     <h2 className="text-base font-extrabold text-slate-900 tracking-tight flex items-center gap-2 mt-0.5">
                       Triage Verification Panel
                       <span className="font-mono text-xs font-bold text-slate-400">
-                        #{selectedSubmission.id}
+                        {formatRequestNumber(selectedSubmission.id)}
                       </span>
                     </h2>
                   </div>
