@@ -60,6 +60,23 @@ export function CustomDropdown({
     );
   }, [options, searchQuery]);
 
+  const hasExactMatch = useMemo(() => {
+    if (!searchQuery.trim()) return true;
+    return options.some(o => o.label.toLowerCase() === searchQuery.trim().toLowerCase());
+  }, [options, searchQuery]);
+
+  const visibleOptions = useMemo(() => {
+    const base = [...filteredOptions];
+    if (searchQuery.trim() && !hasExactMatch) {
+      base.push({
+        value: searchQuery.trim(),
+        label: `+ Create "${searchQuery.trim()}"`,
+        isCreatable: true
+      } as any);
+    }
+    return base;
+  }, [filteredOptions, searchQuery, hasExactMatch]);
+
   // Focus search box when dropdown opens
   useEffect(() => {
     if (isOpen) {
@@ -115,7 +132,7 @@ export function CustomDropdown({
       case "ArrowDown":
         e.preventDefault();
         setFocusedIndex((prev) => {
-          const next = prev + 1 >= filteredOptions.length ? 0 : prev + 1;
+          const next = prev + 1 >= visibleOptions.length ? 0 : prev + 1;
           // Scroll into view
           const item = listRef.current?.children[next] as HTMLElement;
           if (item) item.scrollIntoView({ block: "nearest" });
@@ -125,7 +142,7 @@ export function CustomDropdown({
       case "ArrowUp":
         e.preventDefault();
         setFocusedIndex((prev) => {
-          const next = prev - 1 < 0 ? filteredOptions.length - 1 : prev - 1;
+          const next = prev - 1 < 0 ? visibleOptions.length - 1 : prev - 1;
           // Scroll into view
           const item = listRef.current?.children[next] as HTMLElement;
           if (item) item.scrollIntoView({ block: "nearest" });
@@ -134,8 +151,8 @@ export function CustomDropdown({
         break;
       case "Enter":
         e.preventDefault();
-        if (focusedIndex >= 0 && focusedIndex < filteredOptions.length) {
-          handleSelect(filteredOptions[focusedIndex].value);
+        if (focusedIndex >= 0 && focusedIndex < visibleOptions.length) {
+          handleSelect(visibleOptions[focusedIndex].value);
         }
         break;
       case "Tab":
@@ -144,7 +161,7 @@ export function CustomDropdown({
     }
   };
 
-  const selectedLabel = selectedOption ? selectedOption.label : "";
+  const selectedLabel = selectedOption ? selectedOption.label : selectedValue;
 
   return (
     <div ref={dropdownRef} className="w-full relative space-y-1 text-slate-800">
@@ -201,12 +218,12 @@ export function CustomDropdown({
 
           {/* Options List */}
           <div ref={listRef} className="overflow-y-auto py-1 flex-1 overscroll-contain max-h-[200px] scrollbar-thin">
-            {filteredOptions.length === 0 ? (
+            {visibleOptions.length === 0 ? (
               <div className="px-3 py-2 text-center text-xs text-slate-400">
                 No matching options
               </div>
             ) : (
-              filteredOptions.map((option, idx) => {
+              visibleOptions.map((option, idx) => {
                 const isItemOptionSelected = 
                   option.value === "Other" 
                     ? isOtherSelected 

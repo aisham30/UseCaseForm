@@ -52,10 +52,10 @@ export default function AdminPage() {
 
   // Formatted Request Number helper (Rule 6)
   const formatRequestNumber = (id: number | string | undefined): string => {
-    if (!id) return "GLM-OPP-0000";
+    if (!id) return "REQ-00000";
     const numId = Number(id);
-    if (isNaN(numId)) return `GLM-OPP-${String(id).substring(0, 4).toUpperCase()}`;
-    return `GLM-OPP-${String(numId).padStart(4, '0')}`;
+    if (isNaN(numId)) return `REQ-${String(id).substring(0, 5).toUpperCase()}`;
+    return `REQ-${String(numId).padStart(5, '0')}`;
   };
 
   // Delete Request Workflow (Rule 8)
@@ -971,6 +971,12 @@ export default function AdminPage() {
                   <table className="w-full text-left border-collapse min-w-[1000px] table-fixed">
                     <thead className="sticky top-0 bg-slate-50 z-20 shadow-[0_1px_0_0_rgba(226,232,240,1)]">
                       <tr className="text-[10px] uppercase tracking-wider text-slate-400 font-extrabold">
+                        <th className="px-6 py-4 cursor-pointer hover:bg-slate-100 w-[140px]" onClick={() => handleSort("id")}>
+                          <span className="flex items-center gap-1.5">
+                            Request ID
+                            <ArrowUpDown className="h-3 w-3 text-slate-400" />
+                          </span>
+                        </th>
                         <th className="px-6 py-4 cursor-pointer hover:bg-slate-100 w-[180px]" onClick={() => handleSort("employee_name")}>
                           <span className="flex items-center gap-1.5">
                             Employee Name
@@ -1027,6 +1033,10 @@ export default function AdminPage() {
                             className="hover:bg-slate-50/70 transition cursor-pointer group"
                             onClick={() => setSelectedSubmission(sub)}
                           >
+                            {/* Request ID */}
+                            <td className="px-6 py-4 font-mono font-bold text-slate-500">
+                              {formatRequestNumber(sub.id)}
+                            </td>
                             {/* Name */}
                             <td className="px-6 py-4 font-bold text-slate-900 truncate" title={employeeName}>
                               {employeeName}

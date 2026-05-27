@@ -42,10 +42,10 @@ export default function ReviewerPortalPage() {
 
   // Formatted Request Number helper (Rule 6)
   const formatRequestNumber = (id: number | string | undefined): string => {
-    if (!id) return "GLM-OPP-0000";
+    if (!id) return "REQ-00000";
     const numId = Number(id);
-    if (isNaN(numId)) return `GLM-OPP-${String(id).substring(0, 4).toUpperCase()}`;
-    return `GLM-OPP-${String(numId).padStart(4, '0')}`;
+    if (isNaN(numId)) return `REQ-${String(id).substring(0, 5).toUpperCase()}`;
+    return `REQ-${String(numId).padStart(5, '0')}`;
   };
   const [submissions, setSubmissions] = useState<Submission[]>([]);
   const [isLoading, setIsLoading] = useState(true);

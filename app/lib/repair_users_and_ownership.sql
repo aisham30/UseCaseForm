@@ -67,8 +67,18 @@ SET
 
 
 -- ---------------------------------------------------------------------
--- PHASE 3: REPAIR SUBMISSIONS LEGACY RECORD OWNERSHIP
+-- PHASE 3: SECURE SCHEMA & REPAIR LEGACY RECORD OWNERSHIP
 -- ---------------------------------------------------------------------
+
+-- Proactively ensure all queried enterprise columns are active in the database (Bug 5)
+ALTER TABLE public.submissions ADD COLUMN IF NOT EXISTS status text NOT NULL DEFAULT 'Submitted';
+ALTER TABLE public.submissions ADD COLUMN IF NOT EXISTS tags text[] NOT NULL DEFAULT '{}';
+ALTER TABLE public.submissions ADD COLUMN IF NOT EXISTS admin_notes jsonb NOT NULL DEFAULT '[]'::jsonb;
+ALTER TABLE public.submissions ADD COLUMN IF NOT EXISTS assigned_owner text NOT NULL DEFAULT 'Unassigned';
+ALTER TABLE public.submissions ADD COLUMN IF NOT EXISTS assigned_to text;
+ALTER TABLE public.submissions ADD COLUMN IF NOT EXISTS employee_name text;
+ALTER TABLE public.submissions ADD COLUMN IF NOT EXISTS department text;
+ALTER TABLE public.submissions ADD COLUMN IF NOT EXISTS user_id uuid REFERENCES auth.users(id) ON DELETE SET NULL;
 
 -- 1. Match submissions to their correct user_id based on employee_name = full_name
 UPDATE public.submissions s
