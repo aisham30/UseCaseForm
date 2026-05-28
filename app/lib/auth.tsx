@@ -151,7 +151,8 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
             expires_at: sbSession.expires_at,
           });
           // Write cookie for middleware
-          document.cookie = `supabase-auth-token=${sbSession.access_token}; path=/; max-age=${sbSession.expires_in || 3600}; SameSite=Lax; Secure`;
+          const secureFlag = typeof window !== 'undefined' && window.location.protocol === 'https:' ? '; Secure' : '';
+          document.cookie = `supabase-auth-token=${sbSession.access_token}; path=/; max-age=${sbSession.expires_in || 3600}; SameSite=Lax${secureFlag}`;
         }
         setLoading(false);
       });
@@ -166,7 +167,8 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
             expires_at: sbSession.expires_at,
           });
           // Write cookie for middleware
-          document.cookie = `supabase-auth-token=${sbSession.access_token}; path=/; max-age=${sbSession.expires_in || 3600}; SameSite=Lax; Secure`;
+          const secureFlag = typeof window !== 'undefined' && window.location.protocol === 'https:' ? '; Secure' : '';
+          document.cookie = `supabase-auth-token=${sbSession.access_token}; path=/; max-age=${sbSession.expires_in || 3600}; SameSite=Lax${secureFlag}`;
         } else {
           setUser(null);
           setRole(null);
@@ -190,7 +192,8 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
           setUser(parsed.user);
           setSession(parsed);
           // Set cookie for middleware
-          document.cookie = `formai_mock_session=active; path=/; max-age=86400; SameSite=Lax; Secure`;
+          const secureFlag = typeof window !== 'undefined' && window.location.protocol === 'https:' ? '; Secure' : '';
+          document.cookie = `formai_mock_session=active; path=/; max-age=86400; SameSite=Lax${secureFlag}`;
         }
       } catch (e) {
         console.error("Error restoring mock session:", e);
@@ -236,7 +239,8 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
           // Set cookie for middleware
           if (data.session) {
-            document.cookie = `supabase-auth-token=${data.session.access_token}; path=/; max-age=${data.session.expires_in || 3600}; SameSite=Lax; Secure`;
+            const secureFlag = typeof window !== 'undefined' && window.location.protocol === 'https:' ? '; Secure' : '';
+            document.cookie = `supabase-auth-token=${data.session.access_token}; path=/; max-age=${data.session.expires_in || 3600}; SameSite=Lax${secureFlag}`;
           }
 
           setUser(castUser);
@@ -295,7 +299,8 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       setSession(mockSession);
       localStorage.setItem("formai_mock_session", JSON.stringify(mockSession));
       // Set cookie for middleware
-      document.cookie = `formai_mock_session=active; path=/; max-age=86400; SameSite=Lax; Secure`;
+      const secureFlag = typeof window !== 'undefined' && window.location.protocol === 'https:' ? '; Secure' : '';
+      document.cookie = `formai_mock_session=active; path=/; max-age=86400; SameSite=Lax${secureFlag}`;
       setLoading(false);
       return { error: null, role: mockRole };
     }

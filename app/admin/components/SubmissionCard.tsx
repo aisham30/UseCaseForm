@@ -6,7 +6,7 @@ import {
   MessageSquare, UserPlus, Tag, Check, HelpCircle, Laptop, Settings
 } from "lucide-react";
 import { motion, AnimatePresence } from "framer-motion";
-import { type AdminSubmission, type AdminNote, normalizeAdminNotes } from "../../lib/supabase";
+import { type AdminSubmission, type AdminNote, normalizeAdminNotes, formatRequestNumber } from "../../lib/supabase";
 import { questions } from "../../data/questions";
 import StatusBadge from "./StatusBadge";
 import PriorityBadge from "./PriorityBadge";
@@ -150,6 +150,9 @@ export default function SubmissionCard({
       <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between mb-4">
         <div>
           <div className="flex flex-wrap items-center gap-2 text-xs text-zinc-500">
+            <span className="font-mono text-zinc-300 font-bold bg-zinc-800/80 px-1.5 py-0.5 rounded border border-white/10 tracking-wider">
+              {formatRequestNumber(id)}
+            </span>
             <span className="font-semibold text-zinc-400 tracking-wide">{department}</span>
             <span>·</span>
             <span className="text-zinc-500 font-medium">{affected_area}</span>

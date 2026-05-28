@@ -5,6 +5,7 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { AnimatePresence, motion } from "framer-motion";
 import { ArrowLeft, ArrowRight, CheckCircle2, Loader2, ShieldCheck, HeartPulse, Sparkles, AlertTriangle } from "lucide-react";
+import { formatRequestNumber } from "../../lib/supabase";
 import { sections, Question, Section } from "../../data/questions";
 import { supabase, type Submission } from "../../lib/supabase";
 import { CustomDropdown } from "../../components/CustomDropdown";
@@ -464,7 +465,7 @@ export default function NewRequestPage() {
                   </span>
                 </p>
                 <p className="text-[10px] font-semibold text-slate-400 uppercase tracking-wider">
-                  Opportunity Intake Portal
+                  {editId ? `Editing ${formatRequestNumber(editId)}` : "Opportunity Intake Portal"}
                 </p>
               </div>
             </Link>

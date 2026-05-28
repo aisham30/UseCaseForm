@@ -224,8 +224,10 @@ export default function AdminPage() {
   }
 
   useEffect(() => {
-    loadSubmissions();
-  }, []);
+    if (user) {
+      loadSubmissions();
+    }
+  }, [user]);
 
   const handleRefresh = () => {
     setIsRefreshing(true);
@@ -977,6 +979,9 @@ export default function AdminPage() {
                   <table className="w-full text-left border-collapse min-w-[1000px] table-fixed">
                     <thead className="sticky top-0 bg-slate-50 z-20 shadow-[0_1px_0_0_rgba(226,232,240,1)]">
                       <tr className="text-[10px] uppercase tracking-wider text-slate-400 font-extrabold">
+                        <th className="px-6 py-4 w-[60px]">
+                          No.
+                        </th>
                         <th className="px-6 py-4 cursor-pointer hover:bg-slate-100 w-[140px]" onClick={() => handleSort("id")}>
                           <span className="flex items-center gap-1.5">
                             Request ID
@@ -1022,7 +1027,7 @@ export default function AdminPage() {
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-slate-100 text-[11px] font-medium">
-                      {paginatedSubmissions.map((sub) => {
+                      {paginatedSubmissions.map((sub, index) => {
                         const employeeName = getEmployeeName(sub);
                         const activeStatus = sub.status || "New";
 
@@ -1039,6 +1044,10 @@ export default function AdminPage() {
                             className="hover:bg-slate-50/70 transition cursor-pointer group"
                             onClick={() => setSelectedSubmission(sub)}
                           >
+                            {/* Numbering */}
+                            <td className="px-6 py-4 font-mono font-bold text-slate-500">
+                              {(currentPage - 1) * itemsPerPage + index + 1}
+                            </td>
                             {/* Request ID */}
                             <td className="px-6 py-4 font-mono font-bold text-slate-500">
                               {formatRequestNumber(sub.id)}
@@ -1120,7 +1129,9 @@ export default function AdminPage() {
                       >
                         <div className="flex justify-between items-start">
                           <div>
-                            <h4 className="font-bold text-slate-900 text-xs">{employeeName}</h4>
+                            <h4 className="font-bold text-slate-900 text-xs">
+                              {formatRequestNumber(sub.id)} - {employeeName}
+                            </h4>
                             <p className="text-[10px] text-slate-400 font-semibold">{sub.department} &bull; {formatDate(sub.created_at)}</p>
                           </div>
                           <span className={`inline-flex rounded-full border px-2 py-0.5 text-[9px] font-bold ${urgencyStyle}`}>
