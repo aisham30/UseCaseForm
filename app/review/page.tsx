@@ -533,7 +533,7 @@ export default function ReviewerPortalPage() {
                         </tr>
                       </thead>
                       <tbody>
-                        {filteredSubmissions.map((sub) => {
+                        {filteredSubmissions.map((sub, index) => {
                           const urgencyVal = getUrgency(sub);
                           
                           return (

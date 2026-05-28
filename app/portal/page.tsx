@@ -512,7 +512,7 @@ export default function EmployeePortalPage() {
                             className="hover:bg-slate-50/60 cursor-pointer transition"
                           >
                             <td className="px-6 py-4 font-mono text-[10px] font-bold text-slate-400 truncate">
-                              #{index + 1} • {formatRequestNumber(req.id)}
+                              {formatRequestNumber(req.id)}
                             </td>
                             <td className="px-4 py-4 truncate">
                               <div className="flex flex-col gap-0.5">
