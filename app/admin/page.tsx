@@ -680,7 +680,7 @@ export default function AdminPage() {
           className="w-full bg-white border border-slate-200 hover:border-slate-300 focus:border-blue-500 rounded-lg px-3 py-2 text-xs text-slate-800 outline-none cursor-pointer transition shadow-sm"
         >
           <option value="All">All Statuses</option>
-          {["New", "Under Review", "Approved", "Completed", "Rejected"].map(status => (
+          {["New", "Draft", "Submitted", "Need More Information", "Under Review", "In Progress", "Approved", "Completed", "Implemented", "Rejected"].map(status => (
             <option key={status} value={status}>{status}</option>
           ))}
         </select>
@@ -1081,9 +1081,14 @@ export default function AdminPage() {
                                   className={`rounded-full border px-2.5 py-1 text-[9px] font-bold outline-none cursor-pointer shadow-sm transition hover:scale-[1.01] ${statusColors[activeStatus] || statusColors["New"]}`}
                                 >
                                   <option value="New">New</option>
+                                  <option value="Draft">Draft</option>
+                                  <option value="Submitted">Submitted</option>
+                                  <option value="Need More Information">Need More Information</option>
                                   <option value="Under Review">Under Review</option>
+                                  <option value="In Progress">In Progress</option>
                                   <option value="Approved">Approved</option>
                                   <option value="Completed">Completed</option>
+                                  <option value="Implemented">Implemented</option>
                                   <option value="Rejected">Rejected</option>
                                 </select>
                               </div>
@@ -1158,9 +1163,14 @@ export default function AdminPage() {
                             className={`rounded-full border px-2.5 py-1 text-[9px] font-bold outline-none cursor-pointer shadow-sm ${statusColors[activeStatus] || statusColors["New"]}`}
                           >
                             <option value="New">New</option>
+                            <option value="Draft">Draft</option>
+                            <option value="Submitted">Submitted</option>
+                            <option value="Need More Information">Need More Information</option>
                             <option value="Under Review">Under Review</option>
+                            <option value="In Progress">In Progress</option>
                             <option value="Approved">Approved</option>
                             <option value="Completed">Completed</option>
+                            <option value="Implemented">Implemented</option>
                             <option value="Rejected">Rejected</option>
                           </select>
                         </div>
@@ -1416,9 +1426,14 @@ export default function AdminPage() {
                         className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-2.5 text-xs text-slate-800 outline-none cursor-pointer transition"
                       >
                         <option value="New">New</option>
+                        <option value="Draft">Draft</option>
+                        <option value="Submitted">Submitted</option>
+                        <option value="Need More Information">Need More Information</option>
                         <option value="Under Review">Under Review</option>
+                        <option value="In Progress">In Progress</option>
                         <option value="Approved">Approved</option>
                         <option value="Completed">Completed</option>
+                        <option value="Implemented">Implemented</option>
                         <option value="Rejected">Rejected</option>
                       </select>
                     </div>
