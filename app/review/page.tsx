@@ -38,7 +38,7 @@ const AVAILABLE_TAGS = ["AI", "Automation", "Dashboard", "Process Issue", "Compl
 const AVAILABLE_OWNERS = ["Unassigned", "AI Solutions Team", "Automation Team", "Analytics Support", "IT Operations", "Business Systems"];
 
 export default function ReviewerPortalPage() {
-  const { user, profile } = useAuth();
+  const { user, profile, role } = useAuth();
 
   const [submissions, setSubmissions] = useState<Submission[]>([]);
   const [isLoading, setIsLoading] = useState(true);
@@ -651,53 +651,78 @@ export default function ReviewerPortalPage() {
                     </h3>
                     
                     {/* Status Triage Buttons */}
-                    <div className="space-y-1.5">
-                      <label className="text-[9px] font-extrabold uppercase tracking-wider text-slate-400 block">
-                        Triage Phase Status
-                      </label>
-                      
-                      <div className="flex flex-wrap gap-2">
-                        {[
-                          { label: "Under Review", value: "Under Review" },
-                          { label: "Approved", value: "Approved" },
-                          { label: "Rejected", value: "Rejected" },
-                          { label: "Need Info", value: "Need More Information" },
-                          { label: "In Progress", value: "In Progress" },
-                          { label: "Completed", value: "Completed" }
-                        ].map((badge) => (
-                          <button
-                            key={badge.value}
-                            disabled={isUpdatingStatus}
-                            onClick={() => handleUpdateStatus(badge.value as any)}
-                            className={`px-3 py-2 text-xs font-bold rounded-xl border transition shadow-sm cursor-pointer ${
-                              selectedSubmission.status === badge.value
-                                ? "bg-amber-500 border-amber-500 text-white shadow-amber-500/10"
-                                : "bg-white border-slate-200 text-slate-600 hover:bg-slate-50 hover:text-slate-800"
-                            }`}
-                          >
-                            {badge.label}
-                          </button>
-                        ))}
-                      </div>
-                    </div>
+                    {(() => {
+                      const isFinalized = ["Approved", "Rejected", "Closed", "Completed"].includes(selectedSubmission.status || "");
+                      const isReviewer = role === "reviewer";
+                      const disableTriaging = isReviewer && isFinalized;
 
-                    {/* Technical Assignment Select */}
-                    <div className="space-y-1.5">
-                      <label className="text-[9px] font-extrabold uppercase tracking-wider text-slate-400 block">
-                        Assigned Technical Owner
-                      </label>
-                      <select
-                        value={selectedSubmission.assigned_owner || selectedSubmission.assigned_to || "Unassigned"}
-                        disabled={isUpdatingStatus}
-                        onChange={(e) => updateSubmissionField(selectedSubmission.id!, "assigned_owner", e.target.value)}
-                        className="w-full bg-white border border-slate-200 rounded-xl px-3 py-2.5 text-xs text-slate-800 outline-none cursor-pointer transition shadow-sm focus:border-amber-500"
-                      >
-                        {AVAILABLE_OWNERS.map((own) => (
-                          <option key={own} value={own}>{own}</option>
-                        ))}
-                      </select>
-                    </div>
+                      if (disableTriaging) {
+                        return (
+                          <div className="rounded-xl border border-slate-200 bg-slate-50 p-4 text-center">
+                            <p className="text-xs font-bold text-slate-500">
+                              This request has been finalized by an Administrator and cannot be modified.
+                            </p>
+                          </div>
+                        );
+                      }
 
+                      const availableStatuses = isReviewer ? [
+                        { label: "Under Review", value: "Under Review" },
+                        { label: "Need Info", value: "Need More Information" },
+                        { label: "In Progress", value: "In Progress" },
+                      ] : [
+                        { label: "Under Review", value: "Under Review" },
+                        { label: "Approved", value: "Approved" },
+                        { label: "Rejected", value: "Rejected" },
+                        { label: "Need Info", value: "Need More Information" },
+                        { label: "In Progress", value: "In Progress" },
+                        { label: "Completed", value: "Completed" }
+                      ];
+
+                      return (
+                        <>
+                          <div className="space-y-1.5">
+                            <label className="text-[9px] font-extrabold uppercase tracking-wider text-slate-400 block">
+                              Triage Phase Status
+                            </label>
+                            
+                            <div className="flex flex-wrap gap-2">
+                              {availableStatuses.map((badge) => (
+                                <button
+                                  key={badge.value}
+                                  disabled={isUpdatingStatus}
+                                  onClick={() => handleUpdateStatus(badge.value as any)}
+                                  className={`px-3 py-2 text-xs font-bold rounded-xl border transition shadow-sm cursor-pointer ${
+                                    selectedSubmission.status === badge.value
+                                      ? "bg-amber-500 border-amber-500 text-white shadow-amber-500/10"
+                                      : "bg-white border-slate-200 text-slate-600 hover:bg-slate-50 hover:text-slate-800"
+                                  }`}
+                                >
+                                  {badge.label}
+                                </button>
+                              ))}
+                            </div>
+                          </div>
+
+                          {/* Technical Assignment Select */}
+                          <div className="space-y-1.5">
+                            <label className="text-[9px] font-extrabold uppercase tracking-wider text-slate-400 block">
+                              Assigned Technical Owner
+                            </label>
+                            <select
+                              value={selectedSubmission.assigned_owner || selectedSubmission.assigned_to || "Unassigned"}
+                              disabled={isUpdatingStatus}
+                              onChange={(e) => updateSubmissionField(selectedSubmission.id!, "assigned_owner", e.target.value)}
+                              className="w-full bg-white border border-slate-200 rounded-xl px-3 py-2.5 text-xs text-slate-800 outline-none cursor-pointer transition shadow-sm focus:border-amber-500"
+                            >
+                              {AVAILABLE_OWNERS.map((own) => (
+                                <option key={own} value={own}>{own}</option>
+                              ))}
+                            </select>
+                          </div>
+                        </>
+                      );
+                    })()}
                   </div>
 
                   {/* Collaborative review comments (Phase 4) */}

@@ -156,6 +156,8 @@ export default function NewRequestPage() {
     }
   }, [user, profile, editId]);
 
+  const isLocked = Boolean(editId && ["Approved", "Rejected", "Implemented", "Closed", "Completed"].includes(originalStatus));
+
   const currentSection = sections[currentSectionIndex];
 
   // Validation logic: check if all questions in the current section have valid answers
@@ -198,6 +200,13 @@ export default function NewRequestPage() {
     // 1. Fetch the authenticated Supabase session
     const { data: { session }, error: sessionError } = await supabase.auth.getSession();
     
+    if (isLocked) {
+      setSubmitErrorMsg("This request is locked because it has been finalized.");
+      setStatus("error");
+      setIsSubmitting(false);
+      return;
+    }
+
     console.log("=== SUBMISSION INTAKE SESSION INQUIRY ===");
     console.log("Supabase getSession response error:", sessionError);
     console.log("Supabase active session present:", !!session);
@@ -481,6 +490,19 @@ export default function NewRequestPage() {
             <div className="flex flex-col items-center justify-center py-32 gap-4">
               <Loader2 className="h-8 w-8 animate-spin text-blue-800" />
               <p className="text-xs font-bold uppercase tracking-wider text-slate-500">Retrieving Opportunity Details...</p>
+            </div>
+          ) : isLocked ? (
+            <div className="flex flex-col items-center justify-center py-32 gap-4 animate-fadeIn">
+              <div className="flex h-16 w-16 items-center justify-center rounded-full bg-slate-100 shadow-sm border border-slate-200">
+                <ShieldCheck className="h-8 w-8 text-slate-400" />
+              </div>
+              <div className="text-center">
+                <h2 className="text-xl font-bold tracking-tight text-slate-900">Request Locked</h2>
+                <p className="mt-2 text-xs font-medium text-slate-500 max-w-sm">This request is locked because it has been finalized.</p>
+              </div>
+              <a href="/portal" className="mt-4 inline-flex rounded-xl bg-slate-800 px-6 py-3 text-xs font-bold text-white shadow-sm hover:bg-slate-900 transition">
+                Return to Dashboard
+              </a>
             </div>
           ) : !started ? (
             <WelcomeScreen onStart={() => setStarted(true)} />
